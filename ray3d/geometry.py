@@ -232,3 +232,86 @@ def face_basis(f: Face):
     e2 = np.cross(f.normal, e1)
     e2 /= max(np.linalg.norm(e2), 1e-12)
     return f.verts[0], e1, e2
+
+
+# --------------------------------------------------------------------------- arcs d'esquisse
+# Un profil est une liste de points ; le segment i va du point i au point i+1 (le dernier referme).
+# arcs[i] = flèche (sagitta) du segment i en mètres : 0 = droite, > 0 = bombé à gauche du sens
+# de parcours, < 0 = bombé à droite.
+
+def norm_arcs(pts, arcs):
+    n = len(pts)
+    a = [float(x) for x in (arcs or [])][:n]
+    return a + [0.0] * (n - len(a))
+
+
+def arc_geometry(A, B, s):
+    """Centre, rayon, angle de départ et balayage (rad) de l'arc A → B de flèche s."""
+    A, B = np.asarray(A, float), np.asarray(B, float)
+    c = float(np.linalg.norm(B - A))
+    if c < 1e-12 or abs(s) < 1e-9:
+        return None
+    d = (B - A) / c
+    n = np.array([-d[1], d[0]])
+    M = (A + B) / 2
+    R = (c * c / 4 + s * s) / (2 * abs(s))
+    C = M + n * (s - math.copysign(R, s))
+    total = 4 * math.atan(2 * abs(s) / c)
+    a0 = math.atan2(A[1] - C[1], A[0] - C[0])
+    P = M + n * s                                   # milieu de l'arc
+    for sweep in (total, -total):
+        am = a0 + sweep / 2
+        if np.linalg.norm(C + R * np.array([math.cos(am), math.sin(am)]) - P) < 1e-6 * max(R, 1):
+            return C, R, a0, sweep
+    return C, R, a0, total
+
+
+def arc_points(A, B, s, max_step_deg=6.0):
+    """Points intérieurs de l'arc A → B (sans A ni B)."""
+    g = arc_geometry(A, B, s)
+    if g is None:
+        return []
+    C, R, a0, sweep = g
+    n = max(2, int(math.ceil(abs(math.degrees(sweep)) / max_step_deg)))
+    t = np.arange(1, n) / n
+    ang = a0 + sweep * t
+    return list(np.column_stack([C[0] + R * np.cos(ang), C[1] + R * np.sin(ang)]))
+
+
+def arc_length(A, B, s):
+    g = arc_geometry(A, B, s)
+    if g is None:
+        return float(np.linalg.norm(np.asarray(B, float) - np.asarray(A, float)))
+    return abs(g[1] * g[3])
+
+
+def sagitta_from_radius(c, R, sign=1.0):
+    """Flèche du petit arc de rayon R sur une corde c (R ≥ c/2)."""
+    R = max(R, c / 2)
+    return math.copysign(R - math.sqrt(max(R * R - c * c / 4, 0.0)), sign)
+
+
+def expand_profile(pts, arcs=None):
+    """Polygone (N,2) où chaque arc est remplacé par une suite de segments."""
+    pts = [np.asarray(p, float) for p in pts]
+    a = norm_arcs(pts, arcs)
+    out = []
+    n = len(pts)
+    for i in range(n):
+        out.append(pts[i])
+        if n >= 2 and abs(a[i]) > 1e-9 and (i < n - 1 or n >= 3):
+            out += arc_points(pts[i], pts[(i + 1) % n], a[i])
+    return np.array(out) if out else np.zeros((0, 2))
+
+
+def ccw_with_arcs(pts, arcs):
+    """Oriente le profil dans le sens trigonométrique en gardant les arcs cohérents."""
+    pts = [list(map(float, p)) for p in pts]
+    a = norm_arcs(pts, arcs)
+    if poly_area(expand_profile(pts, a)) >= 0 or len(pts) < 3:
+        return pts, a
+    n = len(pts)
+    # sens inverse : le segment p_i → p_{i+1} devient p_{i+1} → p_i, flèche de signe opposé
+    rp = pts[::-1]
+    ra = [-a[(n - 2 - k) % n] for k in range(n)]
+    return rp, ra

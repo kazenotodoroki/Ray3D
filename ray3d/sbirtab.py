@@ -212,7 +212,7 @@ class SbirTab(QtWidgets.QWidget):
                     self.scan_lab.setText("Sélectionnez une enceinte (HP) pour balayer sa distance au mur.")
                     return
                 m = ctx["scene"].model(o.model)
-                pf = np.asarray(m.profile, float)[:, 0]
+                pf = np.asarray(m.outline(), float)[:, 0]
                 depth = float(pf.max() - pf.min())
                 r = SB.scan_speaker(ctx["scene"], ctx["geo"], ctx["sources"], ctx["listener"], opts, ctx["c"],
                                     depth, st.sbir_scan_min, st.sbir_scan_max)

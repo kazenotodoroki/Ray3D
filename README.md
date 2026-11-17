@@ -54,10 +54,19 @@ Azimut 0° = vers +X, 90° = vers +Y. Site négatif = vers le bas. Les nombres s
 
 ## Formes : esquisse puis extrusion
 
-`+ Pièce`, `+ Objet` et `+ Surface` ouvrent l'éditeur d'esquisse :
+`+ Pièce`, `+ Objet` et `+ Surface` ouvrent l'éditeur d'esquisse (le même sert aux profils
+d'enceintes dans la bibliothèque) :
 
-- clic pour poser un point (aimanté à la grille et à 15°, Maj pour placer librement) ;
-- glisser un point pour le déplacer, clic droit pour retirer le dernier ;
+- clic dans le vide : ajoute un point juste après le point sélectionné (ou à la fin), aimanté à la
+  grille et à 15° (Maj pour placer librement) ;
+- clic sur un point : le sélectionne (bleu, et sa ligne dans le tableau) ; glisser : le déplace ;
+- **Suppr** (dans le dessin ou le tableau) ou le bouton « Supprimer le point » : supprime le point
+  sélectionné, quel qu'il soit ; « Insérer un point » en ajoute un au milieu du segment suivant ;
+- **arcs** : glisser la petite poignée ronde au milieu d'un segment pour le courber, ou saisir sa
+  **flèche** ou son **rayon** dans le tableau (flèche > 0 = arc bombé vers l'extérieur, < 0 = vers
+  l'intérieur, 0 = segment droit) ; le clic droit propose aussi « segment droit » et « demi-cercle » ;
+- **Ctrl+Z / Ctrl+Y** (ou boutons Annuler / Rétablir) dans l'esquisse ;
+- le clic droit ouvre un menu (il ne supprime plus rien directement) ;
 - le tableau donne les coordonnées et la cote de chaque segment : modifier une longueur ou un angle
   décale toute la suite du tracé ;
 - choix du plan (XY dessus, XZ profil, YZ face), de la hauteur d'extrusion, extrusion symétrique ;

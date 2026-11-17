@@ -384,9 +384,11 @@ class LibraryDialog(QtWidgets.QDialog):
             return
         extra = [(m.top_hinge, "arête haute", "#3ec1ff"), (m.bottom_hinge, "arête basse", "#b6ff3a")]
         extra += [((e.f, e.u), e.name, ELEM_COLORS[k % len(ELEM_COLORS)]) for k, e in enumerate(m.elements)]
-        dlg = SketchDialog(self, m.profile, mode="speaker", title=f"Profil latéral · {m.name}", extra=extra)
+        dlg = SketchDialog(self, m.profile, mode="speaker", title=f"Profil latéral · {m.name}", extra=extra,
+                           arcs=m.arcs)
         if dlg.exec():
             m.profile = dlg.profile
+            m.arcs = dlg.arcs
             self._preview()
 
     def _new(self):
@@ -448,7 +450,7 @@ class LibraryDialog(QtWidgets.QDialog):
                          f"Splay sans collision · vertical / couché : {max(lo, -45):.1f}° … {hi:.1f}°"
                          f" · côte à côte : {lo2:.1f}° … {hi2:.1f}°")
         s = fnum(self.splay_prev.text(), 6.0)
-        prof = np.asarray(G.ccw(m.profile), float)
+        prof = np.asarray(G.ccw(m.outline()), float)
         if len(prof) < 3:
             return
 

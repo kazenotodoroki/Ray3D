@@ -689,7 +689,8 @@ class MainWindow(QtWidgets.QMainWindow):
         v = dlg.values()
         n = sum(s.kind == v["kind"] for s in self.scene.shapes) + 1
         sh = Shape(f"{v['kind']} {n}", v["kind"], v["profile"], v["plane"], v["height"], v["symmetric"],
-                   absorption=0.15 if v["kind"] == "Pièce" else 0.2, audience=v["kind"] != "Objet")
+                   absorption=0.15 if v["kind"] == "Pièce" else 0.2, audience=v["kind"] != "Objet",
+                   arcs=v["arcs"])
         if v["recenter"]:
             sh.recenter()
         self.scene.shapes.append(sh)
@@ -704,10 +705,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if sh is None:
             return
         dlg = SketchDialog(self, sh.profile, "shape", sh.kind, sh.plane, sh.height, sh.symmetric,
-                           sh.kind == "Pièce", title=f"Esquisse · {sh.name}")
+                           sh.kind == "Pièce", title=f"Esquisse · {sh.name}", arcs=sh.arcs)
         if not dlg.exec():
             return
         v = dlg.values()
+        sh.arcs = v["arcs"]
         sh.profile, sh.kind, sh.plane, sh.height, sh.symmetric = (v["profile"], v["kind"], v["plane"],
                                                                   v["height"], v["symmetric"])
         if v["recenter"]:

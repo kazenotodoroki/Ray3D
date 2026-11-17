@@ -424,7 +424,8 @@ class PropertyEditor(QtWidgets.QWidget):
                 fs = o.faces()
                 lo, hi = o.corners().min(0), o.corners().max(0)
                 ext = hi - lo
-                self.info_lab.setText(f"Plan {o.plane} · {len(o.profile)} points · {len(fs)} faces\n"
+                narc = sum(abs(a) > 1e-9 for a in (o.arcs or []))
+                self.info_lab.setText(f"Plan {o.plane} · {len(o.profile)} points · {narc} arc(s) · {len(fs)} faces\n"
                                       f"Encombrement {ext[0]:.2f} × {ext[1]:.2f} × {ext[2]:.2f} m\n"
                                       f"z de {lo[2]:.2f} à {hi[2]:.2f} m")
             elif self.kind == "assembly":

@@ -77,6 +77,7 @@ class Shape:
     audience: bool = False         # carte SPL
     assembly: str = ""             # ensemble (objet composé) auquel la forme appartient
     locked: bool = False
+    arcs: list = field(default_factory=list)          # flèche par segment du profil (0 = droit)
     id: str = field(default_factory=new_id)
 
     def faces(self):
@@ -88,10 +89,14 @@ class Shape:
             names = dict(cap0="dessous", cap1="dessus", side="face")
         else:
             names = dict(cap0="flanc A", cap1="flanc B", side="face")
-        faces = G.extrude_faces(self.profile, a, b, e, h, self.symmetric, names)
+        faces = G.extrude_faces(self.outline(), a, b, e, h, self.symmetric, names)
         M = G.rot_z(self.rot) @ G.rot_tilt(self.tilt)
         t = np.array([self.x, self.y, self.z])
         return [f.transformed(M, t) for f in faces]
+
+    def outline(self):
+        """Profil avec les arcs discrétisés."""
+        return G.expand_profile(self.profile, self.arcs)
 
     def audience_faces(self):
         out = []
@@ -148,12 +153,13 @@ class SpeakerModel:
     top_hinge: list = field(default_factory=lambda: [0.0, 0.0])
     bottom_hinge: list = field(default_factory=lambda: [0.0, -0.35])
     elements: list = field(default_factory=lambda: [Element()])
+    arcs: list = field(default_factory=list)         # flèche par segment du profil
     id: str = field(default_factory=new_id)
 
     def local_faces(self):
         """Faces en coordonnées (f, l, u)."""
         a = np.array([1.0, 0, 0]); b = np.array([0, 0, 1.0]); e = np.array([0, 1.0, 0])
-        return G.extrude_faces(self.profile, a, b, e, max(self.width, 0.01), True,
+        return G.extrude_faces(self.outline(), a, b, e, max(self.width, 0.01), True,
                                dict(cap0="flanc", cap1="flanc", side="face"))
 
     def hinge_span(self):
@@ -164,17 +170,20 @@ class SpeakerModel:
             return 0.0
         return float(np.mean([e.el for e in self.elements]))
 
+    def outline(self):
+        return G.expand_profile(self.profile, self.arcs)
+
     def chain(self, orient="Verticale"):
         """Géométrie de chaînage : axe a, axe b (locaux), profil 2D (a, b), arêtes haute/basse."""
         a = np.array([1.0, 0.0, 0.0])
         if orient.startswith("Côte"):
             sb = 1.0 if "→" in orient else -1.0
-            prof = G.ccw(self.profile)
+            prof = G.ccw(self.outline())
             fmin, fmax = float(prof[:, 0].min()), float(prof[:, 0].max())
             w = max(self.width, 0.01) / 2
             return (a, np.array([0.0, sb, 0.0]), [[fmax, w], [fmin, w], [fmin, -w], [fmax, -w]],
                     [fmin, w], [fmin, -w])
-        return a, np.array([0.0, 0.0, 1.0]), self.profile, list(self.top_hinge), list(self.bottom_hinge)
+        return a, np.array([0.0, 0.0, 1.0]), self.outline().tolist(), list(self.top_hinge), list(self.bottom_hinge)
 
     def splay_range(self, orient="Verticale"):
         """(min, max) des splays sans collision entre deux boîtes accrochées par leurs arêtes."""
