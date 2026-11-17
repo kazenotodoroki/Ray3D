@@ -120,6 +120,8 @@ def gain(s, d):
 
 
 def sample_dirs(s, n: int):
+    if n <= 1:
+        return sframe(s)[0][None]
     k = np.arange(n) + 0.5
     r = np.sqrt(k / n)
     psi = k * GOLD

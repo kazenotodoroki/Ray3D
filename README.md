@@ -25,6 +25,8 @@ python run.py scene.json   # ouvrir une scène enregistrée
   double-clic sur son titre, Échap pour revenir). F11 met la fenêtre en plein écran.
 - **Balade en 3D** : bouton « Balade », puis ZQSD / WASD ou flèches, E / C pour monter et descendre,
   Maj pour courir, glisser pour regarder. « À l'écouteur » place la caméra à un point d'écoute.
+- **Vue de l'extérieur** : depuis l'extérieur de la pièce, les murs côté caméra s'effacent et
+  l'intérieur reste visible (enceintes, objets, carte SPL).
 - **Salles et objets dessinés** : esquisse avec cotes, puis extrusion (voir plus bas).
 - **Enceintes** : modèles avec profil extrudé, point d'accroche, arêtes d'accroche et plusieurs
   sources (tweeter, woofer, pavillons…) chacune avec sa position, son orientation et sa directivité.
@@ -32,11 +34,13 @@ python run.py scene.json   # ouvrir une scène enregistrée
   dedans ; optimisation automatique des angles ; disposition verticale, couchée ou côte à côte.
 - **Rangées** (front fills, sources distribuées) avec calcul de l'espacement idéal.
 - **Groupes**, **miroir X / Y lié** (une modification d'un côté est recopiée de l'autre) et
-  **verrou** de position.
+  **verrou** de position (HP, formes, ensembles, écouteurs).
+- **Objets composés** (bureau, régie…) : ensembles de formes, **accrochage coin sur coin** et le long
+  d'une arête, **décalage** d'une sélection multiple, **sauvegarde des ensembles** pour les réutiliser.
 - **Rayons et réflexions** : lancer de rayons coloré par ordre de réflexion, et chemins exacts vers
   un point d'écoute (méthode des sources images) avec retard et niveau.
 - **Carte SPL** sur les zones public et en coupe verticale, avec ou sans délais, à une fréquence,
-  par bande ou en énergie.
+  par bande ou en énergie ; pour toutes les sources ou seulement le HP / groupe sélectionné.
 - **Délais** : la température donne la vitesse du son ; on choisit le ou les groupes main, les autres
   reçoivent leur délai.
 - **SBIR (conception de studio)** : réponse en fréquence au point d'écoute avec les réflexions des
@@ -60,8 +64,47 @@ Azimut 0° = vers +X, 90° = vers +Y. Site négatif = vers le bas. Les nombres s
 - préréglages rectangle et gradins.
 
 Une pièce est automatiquement centrée sur l'origine, sol à z = 0. Double-clic sur une forme dans
-l'arbre pour la rééditer. La carte SPL se calcule sur le sol d'une pièce et sur les faces
+l'arbre pour la rééditer.
+
+Dans les champs numériques, on tape directement la valeur (un clic sélectionne tout) puis Entrée ou
+Tab pour valider ; la virgule est acceptée. Flèches haut / bas ou molette (champ actif) : ± un pas,
+Maj × 10, Ctrl ÷ 10. Échap annule la saisie en cours. La carte SPL se calcule sur le sol d'une pièce et sur les faces
 supérieures d'un objet (marches de gradins) marqués « Zone public ».
+
+## Sélection, déplacements et objets composés
+
+**Sélection multiple** : Ctrl+clic ou Maj+clic dans l'arbre. Les actions Décaler, Verrou, Dupliquer,
+Supprimer et Enregistrer comme ensemble s'appliquent à toute la sélection.
+
+**Coins** : l'élément sélectionné (forme, ensemble ou HP) affiche ses coins numérotés dans les vues,
+et leurs coordonnées dans le tableau « Coins » des propriétés (Ctrl+C pour copier).
+
+**Décaler…** (Ctrl+M) : déplace toute la sélection de dX, dY, dZ. Option « Déplacer une copie ».
+Les éléments verrouillés ne bougent pas. Un HP lié en miroir entraîne son partenaire en symétrie.
+
+**Accrocher…** (Ctrl+K) : pose un coin de l'élément sélectionné sur un coin d'un autre élément
+(ou sur un point libre), puis le fait glisser le long d'une arête partant de ce coin, d'une distance
+donnée (boutons Début / Milieu / Fin), avec un décalage supplémentaire si besoin. Les vues montrent
+le résultat en direct ; Annuler remet tout en place.
+
+Exemple, un bureau : `+ Objet` pour le plateau et chaque pied, puis Accrocher le coin bas du plateau
+sur le coin haut d'un pied ; Accrocher le second pied sous l'autre bout du plateau en glissant le
+long de l'arête.
+
+**Ensembles** (menu « Ensembles ») :
+
+- *Créer un ensemble avec la sélection* (Ctrl+G) : regroupe des formes en un objet composé, qui se
+  sélectionne, se déplace, s'accroche et se verrouille d'un bloc. Glisser une forme sur un ensemble
+  dans l'arbre l'y ajoute ; la glisser sur « FORMES » l'en retire.
+- *Dissocier* (Ctrl+Maj+G).
+- *Enregistrer la sélection comme ensemble…* : fichier `.r3dset` (par défaut dans
+  `~/.ray3d/ensembles/`), qui peut contenir des formes, des ensembles, des HP (avec leurs modèles) et
+  des écouteurs.
+- *Insérer un ensemble…* : l'ajoute à la scène à ses coordonnées d'origine, prêt à être placé avec
+  Accrocher ou Décaler.
+
+**Verrou** (Ctrl+L) : HP, formes, ensembles et écouteurs. Un élément verrouillé ne se déplace ni à la
+souris, ni par Décaler / Accrocher, et ses champs de position sont grisés.
 
 ## Haut-parleurs
 
@@ -185,6 +228,9 @@ ray3d/
   importers.py      import polaires / SOFA / modèles
   sbir.py           calcul SBIR, classement des parois, balayages
   sbirtab.py        onglet SBIR
+  edit.py           coins, déplacements, verrous, ensembles et leur sauvegarde
+  tools.py          dialogues Décaler et Accrocher
+  widgets.py        champs numériques
   demo.py           scènes d'exemple (salle, studio)
   style.py          thème
 exemples/           fichier de polaires d'exemple

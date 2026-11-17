@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 from . import style as S
 from . import geometry as G
 from .model import SHAPE_KINDS
+from .widgets import no_enter_dialog, NoWheelCombo
 
 PLANE_LABELS = {"XY": ("X", "Y", "Z"), "XZ": ("X", "Z", "Y"), "YZ": ("Y", "Z", "X")}
 
@@ -256,6 +257,17 @@ class SketchDialog(QtWidgets.QDialog):
         self._axes()
         self.canvas.redraw(); self.canvas.fit()
         self._sync_table()
+        no_enter_dialog(self)
+
+    def keyPressEvent(self, e):
+        # Entrée valide la cote ou le champ en cours, sans fermer le dialogue
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            fw = self.focusWidget()
+            if isinstance(fw, QtWidgets.QLineEdit):
+                fw.editingFinished.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
 
     # ------------------------------------------------------------------
     def _axes(self):

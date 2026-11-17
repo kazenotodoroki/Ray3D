@@ -39,6 +39,41 @@ OVERLAY = {_GL.GL_DEPTH_TEST: False, _GL.GL_BLEND: True, _GL.GL_CULL_FACE: False
            "glBlendFunc": (_GL.GL_SRC_ALPHA, _GL.GL_ONE_MINUS_SRC_ALPHA)}
 
 
+class SeeThroughMesh(gl.GLMeshItem):
+    """Maillage translucide qui n'écrit pas dans le tampon de profondeur : il ne masque pas ce qui est
+    derrière lui (enceintes dans la pièce vues de l'extérieur, etc.)."""
+
+    def paint(self):
+        _GL.glDepthMask(_GL.GL_FALSE)
+        try:
+            super().paint()
+        finally:
+            _GL.glDepthMask(_GL.GL_TRUE)
+
+
+# murs de pièce : on n'affiche que les faces vues de l'intérieur → vue de l'extérieur, les murs
+# proches de la caméra disparaissent (vue « maison de poupée »)
+ROOM_OPTS = {_GL.GL_DEPTH_TEST: True, _GL.GL_BLEND: True, _GL.GL_CULL_FACE: True,
+             "glCullFace": (_GL.GL_FRONT,), "glBlendFunc": (_GL.GL_SRC_ALPHA, _GL.GL_ONE_MINUS_SRC_ALPHA)}
+
+
+def oriented_mesh(faces):
+    """Maillage dont chaque triangle est tourné dans le sens de la normale extérieure de sa face."""
+    V, F = [], []
+    k = 0
+    for f in faces:
+        v = f.verts
+        V.append(v)
+        for a, b, c in f.tris:
+            if np.cross(v[b] - v[a], v[c] - v[a]) @ f.normal < 0:
+                b, c = c, b
+            F.append((k + a, k + b, k + c))
+        k += len(v)
+    if not V:
+        return np.zeros((0, 3)), np.zeros((0, 3), int)
+    return np.vstack(V), np.array(F, int)
+
+
 def is_on(s, sel):
     return s.owner in sel or s.group in sel or s.id in sel
 
@@ -207,9 +242,33 @@ class View2D(pg.PlotWidget):
             lab = o.name + ("  ⇋" if o.mirror_of else "") + ("  🔒" if o.locked else "") + ("  (mute)" if o.mute else "")
             self._target(self.P(o.pos), col, "object", o.id, lab, symbol=sym, size=10, sel=on, movable=not o.locked)
 
+        # --- coins de l'élément sélectionné et repères d'accrochage
+        C = res.get("corners")
+        if C is not None and len(C):
+            pc = self.P(C)
+            self._add(pg.ScatterPlotItem(pc[:, 0], pc[:, 1], size=6, symbol="s", pen=pg.mkPen("#ffffff"),
+                                         brush=pg.mkBrush(qcolor("#000000", 200))), 45)
+            if len(C) <= 40:
+                seen = {}
+                for i, q in enumerate(pc):       # coins superposés dans cette vue : un seul texte
+                    key = (round(float(q[0]), 3), round(float(q[1]), 3))
+                    seen.setdefault(key, []).append(str(i + 1))
+                for (x, y), labs in seen.items():
+                    t = pg.TextItem(",".join(labs), color=qcolor("#ffffff", 200), anchor=(-0.15, 1.1))
+                    f = t.textItem.font(); f.setPointSize(7); t.setFont(f)
+                    t.setPos(x, y)
+                    self._add(t, 46)
+        for pos, col, lab in res.get("markers", []):
+            q = self.P(np.asarray(pos)[None])[0]
+            self._add(pg.ScatterPlotItem([q[0]], [q[1]], size=13, symbol="d", pen=pg.mkPen("#ffffff"),
+                                         brush=pg.mkBrush(col)), 60)
+            t = pg.TextItem(lab, color=col, anchor=(-0.2, -0.1)); t.setPos(float(q[0]), float(q[1]))
+            self._add(t, 60)
+
         # --- écouteurs
         for l in scene.listeners:
-            self._target(self.P(l.pos), "#e8e8e8", "listener", l.id, l.name, symbol="o", size=9, sel=l.id in sel)
+            self._target(self.P(l.pos), "#e8e8e8", "listener", l.id, l.name, symbol="o", size=9,
+                         sel=l.id in sel, movable=not getattr(l, "locked", False))
 
         if not self._fitted:
             self.fit(scene)
@@ -354,7 +413,7 @@ class View3D(gl.GLViewWidget):
         it.setGLOptions(opts)
         self._add(it)
 
-    def _mesh(self, V, F, rgba=None, vcolors=None, opts="translucent", shader=None):
+    def _mesh(self, V, F, rgba=None, vcolors=None, opts="translucent", shader=None, see_through=None):
         if len(F) == 0:
             return
         kw = dict(vertexes=np.asarray(V, float), faces=np.asarray(F), smooth=False, drawEdges=False)
@@ -364,8 +423,12 @@ class View3D(gl.GLViewWidget):
             kw["color"] = rgba
         if shader:
             kw["shader"] = shader
-        m = gl.GLMeshItem(**kw)
+        if see_through is None:
+            see_through = opts != "opaque"
+        m = (SeeThroughMesh if see_through else gl.GLMeshItem)(**kw)
         m.setGLOptions(opts)
+        if see_through:
+            m.setDepthValue(10)       # translucides dessinés après les éléments opaques
         self._add(m)
 
     def fit(self, scene: Scene):
@@ -418,10 +481,18 @@ class View3D(gl.GLViewWidget):
         for sh in scene.shapes:
             on = sh.id in sel
             faces = sh.faces()
-            self._lines(G.faces_edges(faces), (1, 1, 1, 0.9) if on else S.hex_rgba(S.SHAPE, 0.5), 1.5 if on else 1.0)
-            V, F = G.faces_mesh(faces)
-            a = {"Pièce": 0.04, "Objet": 0.35, "Surface": 0.12}[sh.kind]
-            self._mesh(V, F, S.hex_rgba(S.SHAPE, a), shader="shaded" if sh.kind == "Objet" else None)
+            if sh.kind == "Pièce":
+                # arêtes et murs : seules les faces vues de l'intérieur sont pleines
+                self._lines(G.faces_edges(faces), (1, 1, 1, 0.9) if on else S.hex_rgba(S.SHAPE, 0.35), 1.5 if on else 1.0)
+                V, F = oriented_mesh(faces)
+                self._mesh(V, F, S.hex_rgba(S.SHAPE, 0.07), opts=ROOM_OPTS, see_through=True)
+            else:
+                self._lines(G.faces_edges(faces), (1, 1, 1, 0.9) if on else S.hex_rgba(S.SHAPE, 0.6),
+                            1.5 if on else 1.0)
+                V, F = G.faces_mesh(faces)
+                a = {"Objet": 0.45, "Surface": 0.14}[sh.kind]
+                col = S.hex_rgba("#d8dce4" if on else S.SHAPE, a)
+                self._mesh(V, F, col, shader="shaded" if sh.kind == "Objet" else None)
 
         # --- rayons
         R = res.get("rays")
@@ -480,6 +551,23 @@ class View3D(gl.GLViewWidget):
                        shader="shaded")
             self._lines(G.faces_edges(faces), (1, 1, 1, 0.9) if on else (0, 0, 0, 0.7), 1.0)
             self._add(gl.GLTextItem(pos=o.pos + np.array([0, 0, 0.5]), text=o.name, color=qcolor(col), font=font))
+
+        # --- coins et repères d'accrochage
+        C = res.get("corners")
+        if C is not None and len(C):
+            sp = gl.GLScatterPlotItem(pos=np.asarray(C), size=7, color=(1, 1, 1, 0.95), pxMode=True)
+            sp.setGLOptions(OVERLAY); sp.setDepthValue(20)
+            self._add(sp)
+            if len(C) <= 40:
+                small = QtGui.QFont("DejaVu Sans", 7)
+                for i, q in enumerate(C):
+                    self._add(gl.GLTextItem(pos=np.asarray(q), text=str(i + 1), color=qcolor("#ffffff", 210),
+                                            font=small))
+        for pos, col, lab in res.get("markers", []):
+            sp = gl.GLScatterPlotItem(pos=np.asarray(pos)[None], size=14, color=S.hex_rgba(col), pxMode=True)
+            sp.setGLOptions(OVERLAY); sp.setDepthValue(21)
+            self._add(sp)
+            self._add(gl.GLTextItem(pos=np.asarray(pos), text="  " + lab, color=qcolor(col), font=font))
 
         # --- écouteurs
         if scene.listeners:

@@ -75,6 +75,8 @@ class Shape:
     tilt: float = 0.0              # inclinaison (°), monte vers +X
     absorption: float = 0.1
     audience: bool = False         # carte SPL
+    assembly: str = ""             # ensemble (objet composé) auquel la forme appartient
+    locked: bool = False
     id: str = field(default_factory=new_id)
 
     def faces(self):
@@ -320,11 +322,20 @@ class Group:
 
 
 @dataclass
+class Assembly:
+    """Ensemble de formes (objet composé : bureau, régie, praticable…)."""
+    name: str = "Ensemble"
+    locked: bool = False
+    id: str = field(default_factory=new_id)
+
+
+@dataclass
 class Listener:
     name: str = "Écoute"
     x: float = 0.0
     y: float = 0.0
     z: float = 1.2
+    locked: bool = False
     id: str = field(default_factory=new_id)
 
     @property
@@ -379,6 +390,7 @@ class Settings:
     refl_order: int = 1
     refl_listener: str = ""
     show_spl: bool = True
+    spl_scope: str = "Sélection"
     show_section: bool = True
     freq: float = 1000.0
     band: str = "Octave"
@@ -472,6 +484,7 @@ class Scene:
         self.groups: list[Group] = []
         self.objects: list = []
         self.listeners: list[Listener] = []
+        self.assemblies: list[Assembly] = []
         self.settings = Settings()
         self.sources: list[Source] = []   # générées
         self.bodies: dict = {}            # obj.id -> liste de faces monde par boîte
@@ -496,6 +509,12 @@ class Scene:
     def sources_in(self, gid):
         return [s for s in self.sources if s.group == gid]
 
+    def assembly(self, aid):
+        return next((a for a in self.assemblies if a.id == aid), None)
+
+    def shapes_in(self, aid):
+        return [s for s in self.shapes if s.assembly == aid]
+
     def sources_of(self, oid):
         return [s for s in self.sources if s.owner == oid]
 
@@ -504,7 +523,7 @@ class Scene:
 
     def find(self, oid):
         for kind, coll in (("shape", self.shapes), ("group", self.groups), ("object", self.objects),
-                           ("listener", self.listeners), ("model", self.models)):
+                           ("listener", self.listeners), ("model", self.models), ("assembly", self.assemblies)):
             for o in coll:
                 if o.id == oid:
                     return kind, o
@@ -620,6 +639,7 @@ class Scene:
                     groups=[asdict(g) for g in self.groups],
                     objects=objs,
                     listeners=[asdict(l) for l in self.listeners],
+                    assemblies=[asdict(a) for a in self.assemblies],
                     settings=asdict(self.settings))
 
     @staticmethod
@@ -641,6 +661,11 @@ class Scene:
             if t:
                 sc.objects.append(cls._make(t, x))
         sc.listeners = [cls._make(Listener, x) for x in d.get("listeners", [])]
+        sc.assemblies = [cls._make(Assembly, x) for x in d.get("assemblies", [])]
+        ids = {a.id for a in sc.assemblies}
+        for s in sc.shapes:
+            if s.assembly and s.assembly not in ids:
+                s.assembly = ""
         sc.settings = cls._make(Settings, d.get("settings", {}))
         from .library import default_models
         have = {m.id for m in sc.models}

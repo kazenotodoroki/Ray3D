@@ -17,6 +17,7 @@ from . import geometry as G
 from . import importers as IMP
 from .model import Scene, SpeakerModel, Element, PATTERNS, new_id, frame
 from .sketch import SketchDialog, fnum
+from .widgets import no_enter_dialog
 
 ECOLS = [("name", "Nom"), ("f", "f"), ("l", "l"), ("u", "u"), ("az", "Az °"), ("el", "Site °"),
          ("pattern", "Directivité"), ("cov_h", "Ouv. H"), ("cov_v", "Ouv. V"), ("level", "dB@1m"),
@@ -213,6 +214,17 @@ class LibraryDialog(QtWidgets.QDialog):
         lay.addWidget(right, 1)
 
         self._fill_list(select)
+        no_enter_dialog(self)
+
+    def keyPressEvent(self, e):
+        # Entrée valide le champ en cours sans déclencher de bouton (ni fermer le dialogue)
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            fw = self.focusWidget()
+            if isinstance(fw, QtWidgets.QLineEdit):
+                fw.editingFinished.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
 
     # ------------------------------------------------------------------
     @property

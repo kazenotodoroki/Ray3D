@@ -24,16 +24,19 @@ from .model import (Scene, Shape, Group, Speaker, LineArray, Row, Listener, new_
 from .panels import PropertyEditor, DisplayTab, ArrayTab, DelayTab, ReflTab
 from .sketch import SketchDialog
 from .views import View2D, View3D, ColorLegend, ViewPane
+from . import edit as E
+from .tools import OffsetDialog, SnapDialog
 
 ROLE = Qt.ItemDataRole.UserRole
 AUTOSAVE = os.path.join(os.path.expanduser("~"), ".ray3d", "autosave.json")
-SPL_KEYS = {"temperature", "haas", "ref_mode", "per_group_delay", "apply_delays", "show_spl", "show_section",
+ENSEMBLE_DIR = os.path.join(os.path.expanduser("~"), ".ray3d", "ensembles")
+SPL_KEYS = {"spl_scope", "temperature", "haas", "ref_mode", "per_group_delay", "apply_delays", "show_spl", "show_section",
             "freq", "band", "ear", "section_y", "resolution"}
 
 
 # --------------------------------------------------------------------------- arbre avec glisser-déposer
 class SceneTree(QtWidgets.QTreeWidget):
-    moved = QtCore.Signal(str, str)          # objet, groupe
+    dropped = QtCore.Signal(list, str, str)          # [(kind, id)], type cible, id cible
 
     def __init__(self):
         super().__init__()
@@ -43,6 +46,7 @@ class SceneTree(QtWidgets.QTreeWidget):
         self.header().setStretchLastSection(False)
         self.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.header().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
@@ -50,23 +54,20 @@ class SceneTree(QtWidgets.QTreeWidget):
 
     def dropEvent(self, ev):
         target = self.itemAt(ev.position().toPoint())
-        src = self.currentItem()
         ev.setDropAction(Qt.DropAction.IgnoreAction)
         ev.ignore()
-        if target is None or src is None:
+        if target is None:
             return
-        kind, oid = src.data(0, ROLE) or (None, None)
-        if kind != "object":
-            return
-        t = target.data(0, ROLE) or (None, None)
-        gid = None
-        if t[0] == "group":
-            gid = t[1]
-        elif t[0] == "object" and target.parent() is not None:
-            pt = target.parent().data(0, ROLE)
-            gid = pt[1] if pt else None
-        if gid:
-            QtCore.QTimer.singleShot(0, lambda: self.moved.emit(oid, gid))
+        dragged = [it.data(0, ROLE) for it in self.selectedItems() if it.data(0, ROLE)]
+        t = target.data(0, ROLE)
+        if t is None:                      # en-tête de section : « FORMES » = sortir de l'ensemble
+            if target.text(0) == "FORMES":
+                t = ("shapes_root", "")
+            else:
+                return
+        if t[0] in ("object", "shape") and target.parent() is not None and target.parent().data(0, ROLE):
+            t = target.parent().data(0, ROLE)
+        QtCore.QTimer.singleShot(0, lambda: self.dropped.emit(dragged, t[0], t[1]))
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -76,10 +77,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1600, 960)
         self.scene = scene or default_scene()
         self.sel = None
+        self.multi = set()
+        self.markers = []
         self.path = None
         self.maxed = None
         self._cache = {}
         self.history, self.hpos, self._restoring = [], -1, False
+        self._previewing = False
         self.dirty = False
         self.timer = QtCore.QTimer(self, singleShot=True, interval=40)
         self.timer.timeout.connect(self.recompute)
@@ -133,7 +137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree = SceneTree()
         self.tree.itemSelectionChanged.connect(self.on_tree_select)
         self.tree.itemDoubleClicked.connect(self.on_tree_double)
-        self.tree.moved.connect(self.move_to_group)
+        self.tree.dropped.connect(self.on_drop)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.tree_menu)
         self.props = PropertyEditor(get)
@@ -142,6 +146,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.props.recenter.connect(self.recenter_shape)
         self.props.unlink.connect(self.unlink)
         self.props.openLibrary.connect(self.open_library)
+        self.props.action.connect(lambda a: {"snap": self.snap_selection, "offset": self.offset_selection,
+                                             "save_ensemble": self.save_ensemble,
+                                             "ungroup": self.ungroup_shapes}[a]())
         left = QtWidgets.QSplitter(Qt.Orientation.Vertical)
         left.addWidget(ViewPane(self.tree, "SCÈNE"))
         left.addWidget(ViewPane(self.props, "PROPRIÉTÉS"))
@@ -181,19 +188,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dock_r.setMinimumWidth(370)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_r)
 
-        # barre d'outils
+        # barres d'outils : ligne 1 fichier / édition, ligne 2 ajout
         tb = QtWidgets.QToolBar()
         tb.setMovable(False)
         self.addToolBar(tb)
+        self.addToolBarBreak()
+        tb2 = QtWidgets.QToolBar()
+        tb2.setMovable(False)
+        self.addToolBar(tb2)
 
-        def act(text, fn, sc=None, tip=None):
+        def act(text, fn, sc=None, tip=None, bar=tb):
             a = QtGui.QAction(text, self)
             a.triggered.connect(fn)
             if sc:
                 a.setShortcut(QtGui.QKeySequence(sc))
             if tip:
-                a.setToolTip(tip)
-            tb.addAction(a)
+                a.setToolTip(tip + (f" ({sc})" if sc else ""))
+            bar.addAction(a)
             return a
         act("Nouveau", self.new_scene, "Ctrl+N")
         act("Exemple studio", lambda: self.set_scene(studio_scene()),
@@ -201,30 +212,49 @@ class MainWindow(QtWidgets.QMainWindow):
         act("Ouvrir", self.open_scene, "Ctrl+O")
         act("Enregistrer", self.save_scene, "Ctrl+S")
         tb.addSeparator()
-        act("Annuler", self.undo, "Ctrl+Z", tip="Annuler (Ctrl+Z)")
-        act("Rétablir", self.redo, "Ctrl+Y", tip="Rétablir (Ctrl+Y ou Ctrl+Maj+Z)")
+        act("Annuler", self.undo, "Ctrl+Z", tip="Annuler")
+        act("Rétablir", self.redo, "Ctrl+Y", tip="Rétablir (ou Ctrl+Maj+Z)")
         a = QtGui.QAction(self); a.setShortcut(QtGui.QKeySequence("Ctrl+Shift+Z")); a.triggered.connect(self.redo)
         self.addAction(a)
-        tb.addSeparator()
-        act("+ Pièce", lambda: self.add_shape("Pièce"), tip="Esquisser puis extruder une salle")
-        act("+ Objet", lambda: self.add_shape("Objet"), tip="Esquisser puis extruder un objet (scène, gradins…)")
-        act("+ Surface", lambda: self.add_shape("Surface"), tip="Surface plane esquissée")
-        tb.addSeparator()
-        act("+ Groupe", self.add_group)
-        act("+ HP", self.add_speaker)
-        act("+ Line array", self.add_array)
-        act("+ Rangée", self.add_row, tip="Rangée d'enceintes régulièrement espacées (front fill…)")
-        act("+ Écouteur", self.add_listener)
-        tb.addSeparator()
-        act("Miroir X", lambda: self.mirror("X"), tip="Copie liée en symétrie par rapport au plan X = 0")
-        act("Miroir Y", lambda: self.mirror("Y"), tip="Copie liée en symétrie par rapport au plan Y = 0")
-        act("🔒 Verrou", self.toggle_lock, "Ctrl+L", tip="Verrouiller / déverrouiller la position des HP sélectionnés")
         tb.addSeparator()
         act("Dupliquer", self.duplicate, "Ctrl+D")
         act("Supprimer", self.delete, "Del")
         tb.addSeparator()
+        act("Décaler…", self.offset_selection, "Ctrl+M", tip="Déplacer la sélection d'un décalage dX, dY, dZ")
+        act("Accrocher…", self.snap_selection, "Ctrl+K",
+            tip="Poser un coin de l'élément sélectionné sur un coin d'un autre, puis glisser le long d'une arête")
+        act("🔒 Verrou", self.toggle_lock, "Ctrl+L", tip="Verrouiller / déverrouiller les éléments sélectionnés")
+        ens = QtWidgets.QToolButton()
+        ens.setText("Ensembles ▾")
+        ens.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(ens)
+        for text, fn, sc_ in (("Créer un ensemble avec la sélection", self.group_shapes, "Ctrl+G"),
+                              ("Dissocier l'ensemble", self.ungroup_shapes, "Ctrl+Shift+G"),
+                              ("Enregistrer la sélection comme ensemble…", self.save_ensemble, None),
+                              ("Insérer un ensemble…", self.insert_ensemble, None)):
+            a = menu.addAction(text, fn)
+            if sc_:
+                a.setShortcut(QtGui.QKeySequence(sc_))
+                self.addAction(a)
+        ens.setMenu(menu)
+        tb.addWidget(ens)
+        tb.addSeparator()
+        act("Miroir X", lambda: self.mirror("X"), tip="Copie liée en symétrie par rapport au plan X = 0")
+        act("Miroir Y", lambda: self.mirror("Y"), tip="Copie liée en symétrie par rapport au plan Y = 0")
+        tb.addSeparator()
         act("Bibliothèque HP", lambda: self.open_library(None))
         act("Recadrer", self.fit_views, "F")
+
+        act("+ Pièce", lambda: self.add_shape("Pièce"), tip="Esquisser puis extruder une salle", bar=tb2)
+        act("+ Objet", lambda: self.add_shape("Objet"), tip="Esquisser puis extruder un objet (bureau, scène…)",
+            bar=tb2)
+        act("+ Surface", lambda: self.add_shape("Surface"), tip="Surface plane esquissée", bar=tb2)
+        tb2.addSeparator()
+        act("+ Groupe", self.add_group, bar=tb2)
+        act("+ HP", self.add_speaker, bar=tb2)
+        act("+ Line array", self.add_array, bar=tb2)
+        act("+ Rangée", self.add_row, tip="Rangée d'enceintes régulièrement espacées (front fill…)", bar=tb2)
+        act("+ Écouteur", self.add_listener, bar=tb2)
         a = QtGui.QAction(self); a.setShortcut(QtGui.QKeySequence("F11")); a.triggered.connect(self.toggle_fullscreen)
         self.addAction(a)
         a = QtGui.QAction(self); a.setShortcut(QtGui.QKeySequence("Escape")); a.triggered.connect(self.escape)
@@ -232,10 +262,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addAction(a)
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        tb.addWidget(spacer)
+        tb2.addWidget(spacer)
         self.status = QtWidgets.QLabel()
         self.status.setObjectName("info")
-        tb.addWidget(self.status)
+        tb2.addWidget(self.status)
 
     # ------------------------------------------------------------------ plein écran
     def toggle_max(self, pane):
@@ -308,9 +338,19 @@ class MainWindow(QtWidgets.QMainWindow):
             it.setForeground(1, QtGui.QColor(S.DIM))
             return it
 
-        r = node(self.tree, "FORMES")
+        lk = lambda o: "🔒 " if getattr(o, "locked", False) else ""
+        r = node(self.tree, "FORMES", flags_on=(drop,))
+        r.setFlags(r.flags() | drop)
+        for a in sc.assemblies:
+            members = sc.shapes_in(a.id)
+            ai = node(r, a.name, f"{lk(a)}ensemble · {len(members)}", "assembly", a.id, "#e8e8e8",
+                      flags_on=(drop, drag))
+            for sh in members:
+                node(ai, sh.name, lk(sh) + sh.kind.lower(), "shape", sh.id, flags_on=(drag,))
+            ai.setExpanded(True)
         for sh in sc.shapes:
-            node(r, sh.name, sh.kind.lower(), "shape", sh.id)
+            if not sh.assembly:
+                node(r, sh.name, lk(sh) + sh.kind.lower(), "shape", sh.id, flags_on=(drag,))
         r2 = node(self.tree, "GROUPES")
         for g in sc.groups:
             gi = node(r2, g.name, "main" if g.main else "", "group", g.id, g.color, flags_on=(drop,))
@@ -330,7 +370,7 @@ class MainWindow(QtWidgets.QMainWindow):
             gi.setExpanded(True)
         r3 = node(self.tree, "ÉCOUTEURS")
         for l in sc.listeners:
-            node(r3, l.name, "", "listener", l.id)
+            node(r3, l.name, lk(l).strip(), "listener", l.id)
         r4 = node(self.tree, "MODÈLES DE HP")
         for m in sc.models:
             used = sum(o.model == m.id for o in sc.objects)
@@ -338,14 +378,21 @@ class MainWindow(QtWidgets.QMainWindow):
         for t in (r, r2, r3):
             t.setExpanded(True)
         r4.setExpanded(False)
+        for oid in self.multi:
+            if oid in items:
+                items[oid].setSelected(True)
         if self.sel in items:
             items[self.sel].setSelected(True)
-            self.tree.setCurrentItem(items[self.sel])
+            self.tree.setCurrentItem(items[self.sel], 0, QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
         self.tree.blockSignals(False)
 
     def on_tree_select(self):
-        its = self.tree.selectedItems()
-        d = its[0].data(0, ROLE) if its else None
+        its = [it for it in self.tree.selectedItems() if it.data(0, ROLE)]
+        self.multi = {it.data(0, ROLE)[1] for it in its}
+        cur = self.tree.currentItem()
+        d = cur.data(0, ROLE) if (cur is not None and cur.isSelected()) else None
+        if d is None and its:
+            d = its[-1].data(0, ROLE)
         self.select(d[1] if d else None, from_tree=True)
 
     def on_tree_double(self, it, col):
@@ -359,6 +406,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def select(self, oid, from_tree=False):
         self.sel = oid
+        if not from_tree:
+            self.multi = {oid} if oid else set()
         kind, obj = self.scene.find(oid) if oid else (None, None)
         if kind == "model":
             kind, obj = None, None
@@ -384,6 +433,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 m.addAction("Délier le miroir", lambda: self.unlink(obj))
         if kind == "shape":
             m.addAction("Éditer l'esquisse…", lambda: self.edit_sketch(obj))
+            if obj.assembly:
+                m.addAction("Retirer de l'ensemble", lambda: self.remove_from_assembly())
+        if kind in ("shape", "assembly"):
+            m.addAction("Créer un ensemble avec la sélection", self.group_shapes)
+        if kind == "assembly":
+            m.addAction("Dissocier l'ensemble", self.ungroup_shapes)
+        m.addSeparator()
+        m.addAction("Décaler…", self.offset_selection)
+        m.addAction("Accrocher…", self.snap_selection)
+        m.addAction("Verrouiller / déverrouiller", self.toggle_lock)
+        m.addAction("Enregistrer comme ensemble…", self.save_ensemble)
+        m.addSeparator()
         m.addAction("Dupliquer", self.duplicate)
         m.addAction("Supprimer", self.delete)
         m.exec(self.tree.viewport().mapToGlobal(pos))
@@ -432,7 +493,7 @@ class MainWindow(QtWidgets.QMainWindow):
         _, obj = self.scene.find(oid)
         if obj is None:
             return
-        if getattr(obj, "locked", False):
+        if E.is_locked(self.scene, kind, obj):
             self.schedule(False)
             return
         obj.x = round(a, 3)
@@ -453,13 +514,40 @@ class MainWindow(QtWidgets.QMainWindow):
         self.schedule()
 
     # ------------------------------------------------------------------ calcul
+    def selected_items(self):
+        """Éléments sélectionnés [(kind, obj)], l'élément courant en premier."""
+        sc = self.scene
+        ids = ([self.sel] if self.sel else []) + [i for i in self.multi if i != self.sel]
+        out = []
+        for i in ids:
+            k, o = sc.find(i)
+            if o is not None and k != "model":
+                out.append((k, o))
+        return out
+
     def selected_sources(self):
-        kind, obj = self.scene.find(self.sel) if self.sel else (None, None)
-        if kind == "object":
-            return self.scene.sources_of(obj.id)
-        if kind == "group":
-            return self.scene.sources_in(obj.id)
-        return None
+        """Sources des HP / groupes sélectionnés, ou None si la sélection n'en contient pas."""
+        sc = self.scene
+        srcs, any_src = {}, False
+        for kind, obj in self.selected_items():
+            if kind == "object":
+                ss = sc.sources_of(obj.id)
+            elif kind == "group":
+                ss = sc.sources_in(obj.id)
+            else:
+                continue
+            any_src = True
+            for s in ss:
+                srcs[s.id] = s
+        return list(srcs.values()) if any_src else None
+
+    def selection_ids(self):
+        """Identifiants à surligner (ensembles : leurs formes aussi)."""
+        ids = set(self.multi) | ({self.sel} if self.sel else set())
+        for kind, obj in self.selected_items():
+            if kind == "assembly":
+                ids |= {s.id for s in self.scene.shapes_in(obj.id)}
+        return ids
 
     def sbir_context(self):
         """Contexte du calcul SBIR : sources, écouteur, géométrie, options."""
@@ -536,11 +624,12 @@ class MainWindow(QtWidgets.QMainWindow):
             refl = self._cache["refl"]
 
         maps, section = [], None
-        if st.show_spl and active:
-            key = self._key("spl")
+        spl_src = sel_active if (st.spl_scope == "Sélection" and sel_active) else active
+        if st.show_spl and spl_src:
+            key = self._key(("spl", sorted(s.id for s in spl_src)))
             if self._cache.get("spl_key") != key:
-                self._cache["maps"] = A.spl_maps(sc, active, c)
-                self._cache["section"] = A.spl_section(sc, active, c, geo) if st.show_section else None
+                self._cache["maps"] = A.spl_maps(sc, spl_src, c)
+                self._cache["section"] = A.spl_section(sc, spl_src, c, geo) if st.show_section else None
                 self._cache["spl_key"] = key
             maps, section = self._cache["maps"], self._cache["section"]
         allv = [m["db"][np.isfinite(m["db"])] for m in maps]
@@ -552,18 +641,27 @@ class MainWindow(QtWidgets.QMainWindow):
         vmax = float(np.ceil(np.percentile(allv, 99.5))) if vals else 110.0
         vmin = vmax - st.dyn
         lab = f"{st.freq:g} Hz · {st.band}" if st.band != "Énergie" else "énergie"
+        if spl_src is not active:
+            lab += " · sélection"
         self.legend.set_range(vmin, vmax, lab if vals else "")
 
         shown = refl if (st.show_refl and selected is not None) else []
         sbir_res = None
-        if self.tabs.currentWidget() is self.tab_sbir:
+        if self.tabs.currentWidget() is self.tab_sbir and not self._previewing:
             sbir_res = self.compute_sbir()
             self.tab_sbir.show_result(sbir_res)
             if sbir_res is not None and st.sbir_show_paths:
                 shown = [p for p in sbir_res["used"] if p["order"] > 0]
+        corners = None
+        k0, o0 = sc.find(self.sel) if self.sel else (None, None)
+        if k0 in ("shape", "assembly", "object") and o0 is not None:
+            P, _ = E.sorted_points(sc, k0, o0)
+            if 0 < len(P) <= 200:
+                corners = P
         res = dict(rays=rays, cones=cones, refl=shown, maps=maps, section=section,
-                   range=(vmin, vmax), src_by_id={s.id: s for s in sc.sources})
-        selset = {self.sel} if self.sel else set()
+                   range=(vmin, vmax), src_by_id={s.id: s for s in sc.sources},
+                   corners=corners, markers=self.markers)
+        selset = self.selection_ids()
         self.v3d.render(sc, res, selset)
         self.vtop.render(sc, res, selset)
         self.vside.render(sc, res, selset)
@@ -573,7 +671,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tab_arr.refresh_report()
         self.tab_disp.update_info(sc)
         self.props.update_info(sc)
-        self._push_history()
+        if not self._previewing:
+            self._push_history()
         dt = (time.perf_counter() - t0) * 1000
         self.status.setText(f"c = {c:.1f} m/s   ·   {len(sc.objects)} objets · {len(sc.sources)} sources   ·   "
                             f"{geo.F} faces   ·   {dt:.0f} ms  ")
@@ -719,18 +818,172 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def toggle_lock(self):
         sc = self.scene
-        kind, obj = sc.find(self.sel) if self.sel else (None, None)
-        objs = [obj] if kind == "object" else (sc.objects_in(obj.id) if kind == "group" else [])
-        if not objs:
+        targets = []
+        for kind, obj in self.selected_items():
+            if kind == "group":
+                targets += sc.objects_in(obj.id)
+            elif kind in ("object", "shape", "listener", "assembly"):
+                targets.append(obj)
+        if not targets:
             return
-        state = not all(o.locked for o in objs)
-        for o in objs:
+        state = not all(getattr(o, "locked", False) for o in targets)
+        for o in targets:
             o.locked = state
-            p = sc.partner(o)
+            p = sc.partner(o) if hasattr(o, "mirror_of") else None
             if p is not None:
                 p.locked = state
         self.props.rebuild()
         self.schedule(True)
+
+    # ------------------------------------------------------------------ décaler / accrocher / ensembles
+    def offset_selection(self):
+        items = self.selected_items()
+        if not items:
+            QtWidgets.QMessageBox.information(self, "Décaler", "Sélectionnez un ou plusieurs éléments "
+                                                              "(Ctrl+clic ou Maj+clic dans l'arbre).")
+            return
+        dlg = OffsetDialog(self.scene, items, self)
+        if not dlg.exec():
+            return
+        v = dlg.vector()
+        if dlg.copy.isChecked():
+            d = E.ensemble_dict(self.scene, items, "copie")
+            created = E.insert_ensemble(self.scene, d, v)
+            if created:
+                self.multi = {o.id for _, o in created}
+                self.sel = created[0][1].id
+            self.status.setText(f"{len(created)} élément(s) copié(s)")
+        else:
+            moved, locked = E.translate(self.scene, items, v)
+            self.status.setText(f"{len(moved)} élément(s) décalé(s)" +
+                                (f" · {len(locked)} verrouillé(s) ignoré(s)" if locked else ""))
+        self.props.reload()
+        self.schedule(True)
+        kind, obj = self.scene.find(self.sel) if self.sel else (None, None)
+        self.props.set_object(kind if kind != "model" else None, obj if kind != "model" else None)
+
+    def snap_selection(self):
+        items = self.selected_items()
+        if not items or items[0][0] not in ("shape", "assembly", "object", "listener"):
+            QtWidgets.QMessageBox.information(self, "Accrocher", "Sélectionnez une forme, un ensemble, un HP ou un "
+                                                                 "écouteur à déplacer.")
+            return
+        dlg = SnapDialog(self.scene, items, items[0], self)
+        dlg.preview.connect(self._snap_preview)
+        self._previewing = True
+        try:
+            dlg.update_preview()
+            ok = dlg.exec()
+        finally:
+            self._previewing = False
+            self.markers = []
+        self.props.reload()
+        self.schedule(True)
+        if ok:
+            self.status.setText("Élément accroché")
+
+    def _snap_preview(self, markers):
+        self.markers = markers
+        self.scene.sync()
+        self.recompute()
+
+    def group_shapes(self):
+        sc = self.scene
+        shapes, olds = [], []
+        for kind, obj in self.selected_items():
+            if kind == "shape":
+                shapes.append(obj)
+            elif kind == "assembly":
+                shapes += sc.shapes_in(obj.id)
+                olds.append(obj)
+        shapes = list({s.id: s for s in shapes if s.kind != "Pièce"}.values())
+        if len(shapes) < 1:
+            QtWidgets.QMessageBox.information(self, "Ensemble", "Sélectionnez des formes (objets ou surfaces) avec "
+                                                                "Ctrl+clic dans l'arbre.")
+            return
+        name, ok = QtWidgets.QInputDialog.getText(self, "Ensemble", "Nom de l'ensemble :",
+                                                  text=olds[0].name if olds else f"Ensemble {len(sc.assemblies) + 1}")
+        if not ok:
+            return
+        for a in olds:
+            sc.assemblies.remove(a)
+        a = E.make_assembly(sc, shapes, name.strip() or None)
+        self.schedule(True)
+        self.select(a.id)
+
+    def ungroup_shapes(self):
+        sc = self.scene
+        for kind, obj in self.selected_items():
+            if kind == "assembly":
+                E.dissolve(sc, obj)
+        self.sel = None
+        self.multi = set()
+        self.props.set_object(None, None)
+        self.schedule(True)
+
+    def remove_from_assembly(self):
+        sc = self.scene
+        for kind, obj in self.selected_items():
+            if kind == "shape" and obj.assembly:
+                a = sc.assembly(obj.assembly)
+                obj.assembly = ""
+                if a is not None and not sc.shapes_in(a.id):
+                    sc.assemblies.remove(a)
+        self.schedule(True)
+
+    def on_drop(self, dragged, tkind, tid):
+        sc = self.scene
+        changed = False
+        for kind, oid in dragged:
+            k, o = sc.find(oid)
+            if k == "object" and tkind == "group":
+                o.group = tid; changed = True
+            elif k == "shape" and tkind == "assembly" and o.kind != "Pièce":
+                o.assembly = tid; changed = True
+            elif k == "shape" and tkind == "shapes_root":
+                o.assembly = ""; changed = True
+        for a in list(sc.assemblies):
+            if not sc.shapes_in(a.id):
+                sc.assemblies.remove(a)
+        if changed:
+            self.schedule(True)
+
+    def save_ensemble(self):
+        items = self.selected_items()
+        if not items:
+            QtWidgets.QMessageBox.information(self, "Ensemble", "Sélectionnez ce qu'il faut enregistrer "
+                                                                "(ensembles, formes, HP, écouteurs).")
+            return
+        name = items[0][1].name if items[0][0] == "assembly" else "ensemble"
+        os.makedirs(ENSEMBLE_DIR, exist_ok=True)
+        p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Enregistrer l'ensemble",
+                                                     os.path.join(ENSEMBLE_DIR, f"{name}.r3dset"),
+                                                     "Ensemble Ray 3D (*.r3dset)")
+        if not p:
+            return
+        if not p.lower().endswith(".r3dset"):
+            p += ".r3dset"
+        d = E.save_ensemble(self.scene, items, p, os.path.splitext(os.path.basename(p))[0])
+        self.status.setText(f"Ensemble enregistré : {len(d['shapes'])} forme(s), {len(d['objects'])} HP")
+
+    def insert_ensemble(self):
+        os.makedirs(ENSEMBLE_DIR, exist_ok=True)
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Insérer un ensemble", ENSEMBLE_DIR,
+                                                     "Ensemble Ray 3D (*.r3dset *.json)")
+        if not p:
+            return
+        try:
+            created = E.insert_ensemble(self.scene, E.load_ensemble(p))
+        except Exception as ex:
+            QtWidgets.QMessageBox.warning(self, "Ensemble", f"Lecture impossible :\n{ex}")
+            return
+        if created:
+            self.multi = {o.id for _, o in created}
+            self.sel = created[0][1].id
+        self.schedule(True)
+        kind, obj = self.scene.find(self.sel) if self.sel else (None, None)
+        self.props.set_object(kind, obj)
+        self.status.setText(f"Ensemble inséré ({len(created)} élément(s)) — utilisez Accrocher ou Décaler pour le placer")
 
     # ------------------------------------------------------------------ annuler / sauvegarde auto
     def _snapshot(self):
@@ -760,6 +1013,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir):
                 t.load()
             self.sel = sel if sc.find(sel)[1] is not None else None
+            self.multi = {i for i in self.multi if sc.find(i)[1] is not None}
             kind, obj = sc.find(self.sel) if self.sel else (None, None)
             self.props.set_object(kind if kind != "model" else None, obj if kind != "model" else None)
             self.refresh_tree()
@@ -805,53 +1059,69 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def duplicate(self):
         sc = self.scene
-        kind, obj = sc.find(self.sel) if self.sel else (None, None)
-        if obj is None or kind == "model":
+        items = self.selected_items()
+        if not items:
             return
-        new = copy.deepcopy(obj)
-        new.id = new_id()
-        new.name = obj.name + " copie"
-        if kind == "shape":
-            new.y += 2.0; sc.shapes.append(new)
-        elif kind == "object":
-            new.y += 2.0; new.mirror_of = new.mirror_axis = ""
-            sc.objects.append(new)
-        elif kind == "listener":
-            new.y += 2.0; sc.listeners.append(new)
-        elif kind == "group":
+        if len(items) == 1 and items[0][0] == "group":
+            obj = items[0][1]
+            new = copy.deepcopy(obj); new.id = new_id(); new.name = obj.name + " copie"
             new.color = sc.next_color(); new.main = False
             sc.groups.append(new)
             for o in sc.objects_in(obj.id):
                 o2 = copy.deepcopy(o); o2.id = new_id(); o2.group = new.id; o2.mirror_of = o2.mirror_axis = ""
+                o2.locked = False
                 sc.objects.append(o2)
+            self.schedule(True)
+            self.select(new.id)
+            return
+        d = E.ensemble_dict(sc, items, "copie")
+        created = E.insert_ensemble(sc, d, (0.0, 1.0, 0.0))
+        for k, o in created:
+            if hasattr(o, "name") and k != "assembly":
+                o.name = o.name + " copie"
+            if hasattr(o, "locked"):
+                o.locked = False
+        if created:
+            self.multi = {o.id for _, o in created}
+            self.sel = created[0][1].id
         self.schedule(True)
-        self.select(new.id)
+        kind, obj = sc.find(self.sel) if self.sel else (None, None)
+        self.props.set_object(kind, obj)
 
     def delete(self):
         sc = self.scene
-        kind, obj = sc.find(self.sel) if self.sel else (None, None)
-        if obj is None:
+        items = self.selected_items()
+        if not items:
             return
-        if kind == "shape":
-            sc.shapes.remove(obj)
-        elif kind == "object":
-            sc.unlink(obj)
-            sc.objects.remove(obj)
-        elif kind == "group":
-            if sc.objects_in(obj.id):
-                r = QtWidgets.QMessageBox.question(self, "Supprimer", f"Supprimer le groupe « {obj.name} » et ses "
-                                                                       f"{len(sc.objects_in(obj.id))} objet(s) ?")
-                if r != QtWidgets.QMessageBox.StandardButton.Yes:
-                    return
-            for o in sc.objects_in(obj.id):
-                sc.unlink(o)
-            sc.objects = [o for o in sc.objects if o.group != obj.id]
-            sc.groups.remove(obj)
-        elif kind == "listener":
-            sc.listeners.remove(obj)
-        else:
-            return
+        groups = [o for k, o in items if k == "group" and sc.objects_in(o.id)]
+        asms = [o for k, o in items if k == "assembly" and sc.shapes_in(o.id)]
+        if groups or asms:
+            n = sum(len(sc.objects_in(g.id)) for g in groups) + sum(len(sc.shapes_in(a.id)) for a in asms)
+            r = QtWidgets.QMessageBox.question(self, "Supprimer", f"Supprimer aussi les {n} élément(s) contenus "
+                                                                   f"dans les groupes / ensembles sélectionnés ?")
+            if r != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        for kind, obj in items:
+            if kind == "shape" and obj in sc.shapes:
+                sc.shapes.remove(obj)
+            elif kind == "assembly" and obj in sc.assemblies:
+                sc.shapes = [s for s in sc.shapes if s.assembly != obj.id]
+                sc.assemblies.remove(obj)
+            elif kind == "object" and obj in sc.objects:
+                sc.unlink(obj)
+                sc.objects.remove(obj)
+            elif kind == "group" and obj in sc.groups:
+                for o in sc.objects_in(obj.id):
+                    sc.unlink(o)
+                sc.objects = [o for o in sc.objects if o.group != obj.id]
+                sc.groups.remove(obj)
+            elif kind == "listener" and obj in sc.listeners:
+                sc.listeners.remove(obj)
+        for a in list(sc.assemblies):
+            if not sc.shapes_in(a.id):
+                sc.assemblies.remove(a)
         self.sel = None
+        self.multi = set()
         self.props.set_object(None, None)
         self.schedule(True)
 
@@ -867,6 +1137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history, self.hpos = [], -1
         self.scene = sc
         self.sel = None
+        self.multi = set()
         self._cache.clear()
         self.props.set_object(None, None)
         for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir):

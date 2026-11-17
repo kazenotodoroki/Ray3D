@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from . import style as S
 from . import sbir as SB
 from .panels import Binder, scroll_form, make_table, cell
+from .widgets import NoWheelCombo
 
 SCANS = ["Distance enceinte ↔ mur", "Écoute le long de X", "Écoute le long de Y"]
 
@@ -56,7 +57,7 @@ class SbirTab(QtWidgets.QWidget):
         b.changed.connect(lambda a: self.changed.emit(False))
 
         b.section("Point d'écoute et sources")
-        self.lst = QtWidgets.QComboBox()
+        self.lst = NoWheelCombo()
         self.lst.currentIndexChanged.connect(self._lst_changed)
         form.addRow("Écouteur", self.lst)
         b.add("sbir_scope", "Sources", "choice", choices=["Sélection", "Toutes les sources"],

@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from . import style as S
 from .model import Scene, SHAPE_KINDS, PATTERNS, ORIENTS, speed_of_sound
 from . import acoustics as A
+from .widgets import NumField, NoWheelCombo
 
 FREQS = ["63", "125", "250", "500", "1000", "2000", "4000", "8000", "16000"]
 
@@ -43,20 +44,16 @@ class Binder(QtCore.QObject):
         obj = self.get()
         v = getattr(obj, attr)
         if kind == "float":
-            w = QtWidgets.QDoubleSpinBox()
-            w.setLocale(QtCore.QLocale.c())
-            w.setRange(lo, hi); w.setDecimals(dec); w.setSingleStep(step)
-            w.setKeyboardTracking(False); w.setSuffix(suffix); w.setValue(float(v))
+            w = NumField(float(v), lo, hi, step, dec, suffix)
             w.valueChanged.connect(lambda val, a=attr: self._set(a, float(val)))
         elif kind == "int":
-            w = QtWidgets.QSpinBox()
-            w.setRange(int(lo), int(hi)); w.setKeyboardTracking(False); w.setSuffix(suffix); w.setValue(int(v))
+            w = NumField(int(v), int(lo), int(hi), 1, 0, suffix, integer=True)
             w.valueChanged.connect(lambda val, a=attr: self._set(a, int(val)))
         elif kind == "str":
             w = QtWidgets.QLineEdit(str(v))
             w.editingFinished.connect(lambda a=attr, ww=w: self._set(a, ww.text()))
         elif kind == "choice":
-            w = QtWidgets.QComboBox()
+            w = NoWheelCombo()
             for c in choices:
                 if isinstance(c, tuple):
                     w.addItem(c[0], c[1])
@@ -66,7 +63,7 @@ class Binder(QtCore.QObject):
             w.setCurrentIndex(max(i, 0))
             w.currentIndexChanged.connect(lambda i, a=attr, ww=w: self._set(a, ww.itemData(i)))
         elif kind == "freq":
-            w = QtWidgets.QComboBox()
+            w = NoWheelCombo()
             w.setEditable(True)
             w.addItems(FREQS)
             w.setCurrentText(f"{v:g}")
@@ -165,7 +162,7 @@ def scroll_form():
 
 
 def make_table(headers, stretch=None):
-    t = QtWidgets.QTableWidget(0, len(headers))
+    t = CopyTable(0, len(headers))
     t.setHorizontalHeaderLabels(headers)
     t.verticalHeader().setVisible(False)
     t.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -181,6 +178,20 @@ def make_table(headers, stretch=None):
     t.verticalHeader().setDefaultSectionSize(22)
     t.setShowGrid(False)
     return t
+
+
+class CopyTable(QtWidgets.QTableWidget):
+    """Tableau dont Ctrl+C copie les cellules sélectionnées (tabulations / lignes)."""
+
+    def keyPressEvent(self, e):
+        if e.matches(QtGui.QKeySequence.StandardKey.Copy):
+            rows = {}
+            for it in self.selectedItems():
+                rows.setdefault(it.row(), {})[it.column()] = it.text()
+            txt = "\n".join("\t".join(r[c] for c in sorted(r)) for _, r in sorted(rows.items()))
+            QtWidgets.QApplication.clipboard().setText(txt)
+            return
+        super().keyPressEvent(e)
 
 
 def cell(text, color=None, align_right=True):
@@ -199,6 +210,7 @@ class PropertyEditor(QtWidgets.QWidget):
     recenter = QtCore.Signal(object)
     unlink = QtCore.Signal(object)
     openLibrary = QtCore.Signal(str)
+    action = QtCore.Signal(str)            # "snap", "offset", "save_ensemble", "ungroup"
 
     STRUCT = {"name", "kind", "group", "color", "n", "main", "model", "mute", "locked", "orient"}
 
@@ -212,6 +224,7 @@ class PropertyEditor(QtWidgets.QWidget):
         self.body = None
         self.info_lab = None
         self.binder = None
+        self.corner_table = None
         self.set_object(None, None)
 
     def set_object(self, kind, obj):
@@ -235,6 +248,7 @@ class PropertyEditor(QtWidgets.QWidget):
         self.lay.addWidget(sa)
         self.info_lab = None
         self.binder = None
+        self.corner_table = None
         sc, o, k = self.scene(), self.obj, self.kind
         if o is None:
             lab = QtWidgets.QLabel("Sélectionnez un élément de la scène.\n\nGlissez un HP, un line array ou "
@@ -248,17 +262,23 @@ class PropertyEditor(QtWidgets.QWidget):
         pos = dict(suffix=" m", step=0.05, dec=3)
         ang = dict(lo=-360, hi=360, step=0.5, dec=1, suffix=" °")
         if k == "shape":
+            asm = sc.assembly(o.assembly) if o.assembly else None
+            lk = o.locked or bool(asm and asm.locked)
             b.section("Forme")
             b.add("name", "Nom", "str")
             b.add("kind", "Type", "choice", choices=SHAPE_KINDS)
+            if asm is not None:
+                b.info(f"Fait partie de l'ensemble « {asm.name} »" + (" (verrouillé)" if asm.locked else ""))
+            b.add("locked", "🔒 Position verrouillée", "bool")
             self._button(form, "Éditer l'esquisse et l'extrusion…", lambda: self.editSketch.emit(o), True)
             b.section("Placement")
             for a in ("x", "y", "z"):
-                b.add(a, f"Décalage {a.upper()}", **pos)
-            b.add("rot", "Rotation Z", **ang)
-            b.add("tilt", "Inclinaison", lo=-80, hi=80, step=1, dec=1, suffix=" °",
+                b.add(a, f"Décalage {a.upper()}", enabled=not lk, **pos)
+            b.add("rot", "Rotation Z", enabled=not lk, **ang)
+            b.add("tilt", "Inclinaison", lo=-80, hi=80, step=1, dec=1, suffix=" °", enabled=not lk,
                   tip="Rotation qui fait monter le côté +X (surfaces, rampes)")
-            self._button(form, "Centrer sur l'origine · sol à z = 0", lambda: self.recenter.emit(o))
+            self._place_buttons(form, lk)
+            self._button(form, "Centrer sur l'origine · sol à z = 0", lambda: self.recenter.emit(o)).setEnabled(not lk)
             if o.kind != "Surface":
                 b.add("height", "Extrusion", lo=0.01, hi=500, step=0.1, suffix=" m")
                 b.add("symmetric", "Extrusion symétrique", "bool")
@@ -266,6 +286,19 @@ class PropertyEditor(QtWidgets.QWidget):
             b.add("absorption", "Absorption α", lo=0, hi=1, step=0.05)
             b.add("audience", "Zone public (carte SPL)", "bool")
             self.info_lab = b.info()
+            self._corners(form)
+        elif k == "assembly":
+            members = sc.shapes_in(o.id)
+            b.section("Ensemble")
+            b.add("name", "Nom", "str")
+            b.add("locked", "🔒 Position verrouillée", "bool")
+            self._place_buttons(form, o.locked)
+            self._button(form, "Enregistrer l'ensemble…", lambda: self.action.emit("save_ensemble"))
+            self._button(form, "Dissocier", lambda: self.action.emit("ungroup"))
+            self.info_lab = b.info()
+            b.info("Glissez une forme sur l'ensemble dans l'arbre pour l'y ajouter, ou sur « FORMES » pour l'en "
+                   "retirer. Les formes gardent leurs propres réglages.")
+            self._corners(form)
         elif k == "object":
             lab = {"speaker": "Haut-parleur", "array": "Line array", "row": "Rangée"}[o.TYPE]
             b.section(lab)
@@ -308,6 +341,7 @@ class PropertyEditor(QtWidgets.QWidget):
                 b.add("spacing", "Espacement", lo=0.05, hi=100, step=0.1, suffix=" m", enabled=not lk)
                 b.add("row_angle", "Direction ligne", enabled=not lk, **ang)
             b.add("flip", "Modèle inversé gauche/droite", "bool", enabled=not lk)
+            self._place_buttons(form, lk)
             b.section("Réglages")
             b.add("gain", "Gain", lo=-60, hi=20, step=0.5, dec=1, suffix=" dB")
             b.add("delay_offset", "Offset délai", lo=-500, hi=500, step=0.1, suffix=" ms")
@@ -322,8 +356,45 @@ class PropertyEditor(QtWidgets.QWidget):
         elif k == "listener":
             b.section("Point d'écoute")
             b.add("name", "Nom", "str")
+            b.add("locked", "🔒 Position verrouillée", "bool")
             for a in ("x", "y", "z"):
-                b.add(a, a.upper(), **pos)
+                b.add(a, a.upper(), enabled=not o.locked, **pos)
+            self._place_buttons(form, o.locked)
+        if k == "object":
+            self._corners(form)
+
+    def _place_buttons(self, form, locked):
+        hb = QtWidgets.QHBoxLayout()
+        for text, act in (("Accrocher…", "snap"), ("Décaler…", "offset")):
+            bt = QtWidgets.QPushButton(text)
+            bt.clicked.connect(lambda _=False, a=act: self.action.emit(a))
+            bt.setEnabled(not locked)
+            hb.addWidget(bt)
+        form.addRow(hb)
+
+    def _corners(self, form):
+        lab = QtWidgets.QLabel("COINS")
+        lab.setObjectName("section")
+        form.addRow(lab)
+        t = make_table(["#", "X", "Y", "Z"])
+        t.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        t.setMinimumHeight(150)
+        t.setMaximumHeight(240)
+        t.setToolTip("Coordonnées des coins (numéros affichés dans les vues). Ctrl+C pour copier.")
+        form.addRow(t)
+        self.corner_table = t
+
+    def _fill_corners(self, scene):
+        t = self.corner_table
+        if t is None or self.obj is None:
+            return
+        from . import edit as E
+        P, _ = E.sorted_points(scene, self.kind, self.obj)
+        t.setRowCount(len(P))
+        for i, p in enumerate(P):
+            t.setItem(i, 0, cell(str(i + 1), S.DIM))
+            for j in range(3):
+                t.setItem(i, j + 1, cell(f"{p[j]:.3f}"))
 
     def _on_change(self, attr):
         o = self.obj
@@ -339,9 +410,15 @@ class PropertyEditor(QtWidgets.QWidget):
             self.binder.load()
 
     def update_info(self, scene: Scene):
-        if self.info_lab is None or self.obj is None:
+        if self.obj is None:
             return
         o, c = self.obj, speed_of_sound(scene.settings.temperature)
+        try:
+            self._fill_corners(scene)
+        except RuntimeError:
+            pass
+        if self.info_lab is None:
+            return
         try:
             if self.kind == "shape":
                 fs = o.faces()
@@ -350,6 +427,15 @@ class PropertyEditor(QtWidgets.QWidget):
                 self.info_lab.setText(f"Plan {o.plane} · {len(o.profile)} points · {len(fs)} faces\n"
                                       f"Encombrement {ext[0]:.2f} × {ext[1]:.2f} × {ext[2]:.2f} m\n"
                                       f"z de {lo[2]:.2f} à {hi[2]:.2f} m")
+            elif self.kind == "assembly":
+                shapes = scene.shapes_in(o.id)
+                if shapes:
+                    P = np.vstack([s.corners() for s in shapes])
+                    lo, hi = P.min(0), P.max(0)
+                    ext = hi - lo
+                    self.info_lab.setText(f"{len(shapes)} forme(s) : " + ", ".join(s.name for s in shapes[:6]) +
+                                          f"\nEncombrement {ext[0]:.2f} × {ext[1]:.2f} × {ext[2]:.2f} m\n"
+                                          f"Coin bas : ({lo[0]:.3f}, {lo[1]:.3f}, {lo[2]:.3f})")
             elif self.kind == "object":
                 m = scene.model(o.model)
                 ss = scene.sources_of(o.id)
@@ -395,7 +481,7 @@ class DisplayTab(QtWidgets.QWidget):
         b.section("Rayons")
         b.add("show_rays", "Lancer de rayons", "bool")
         b.add("rays_selection_only", "Seulement la sélection", "bool")
-        b.add("nrays", "Rayons / source", "int", lo=4, hi=3000)
+        b.add("nrays", "Rayons / source", "int", lo=1, hi=3000)
         b.add("max_order", "Réflexions max", "int", lo=0, hi=10)
         b.add("ray_len", "Longueur max", lo=1, hi=1000, step=5, dec=0, suffix=" m")
         leg = QtWidgets.QLabel(" ".join(
@@ -405,6 +491,9 @@ class DisplayTab(QtWidgets.QWidget):
         b.form.addRow(leg)
         b.section("Carte SPL")
         b.add("show_spl", "Zones public", "bool")
+        b.add("spl_scope", "Sources de la carte", "choice", choices=["Sélection", "Toutes les sources"],
+              tip="Sélection : seulement le HP / groupe sélectionné (toutes les sources si la sélection n'en "
+                  "contient pas)")
         b.add("show_section", "Coupe verticale XZ", "bool")
         b.add("section_y", "Position coupe Y", lo=-1000, hi=1000, step=0.25, suffix=" m")
         b.add("freq", "Fréquence (Hz)", "freq")
@@ -442,7 +531,7 @@ class ArrayTab(QtWidgets.QWidget):
         b.changed.connect(lambda a: self.changed.emit(False))
 
         b.section("Line array")
-        self.combo = QtWidgets.QComboBox()
+        self.combo = NoWheelCombo()
         self.combo.currentIndexChanged.connect(lambda _: self.refresh_report())
         form.addRow("Line array", self.combo)
         b.section("Public à couvrir (distances depuis l'accroche)")
@@ -471,7 +560,7 @@ class ArrayTab(QtWidgets.QWidget):
         form.addRow(self.coupling)
 
         b.section("Rangée (front fill, distribué)")
-        self.row_combo = QtWidgets.QComboBox()
+        self.row_combo = NoWheelCombo()
         self.row_combo.currentIndexChanged.connect(lambda _: self.refresh_report())
         form.addRow("Rangée", self.row_combo)
         b.add("row_dist", "Distance d'écoute D", lo=0.1, hi=200, step=0.5, suffix=" m",
@@ -613,7 +702,7 @@ class DelayTab(QtWidgets.QWidget):
         self.c_lab = QtWidgets.QLabel(); self.c_lab.setObjectName("value")
         form.addRow("Vitesse du son", self.c_lab)
         b.section("Alignement")
-        self.ref = QtWidgets.QComboBox()
+        self.ref = NoWheelCombo()
         self.ref.currentIndexChanged.connect(self._ref_changed)
         form.addRow("Point de référence", self.ref)
         b.add("haas", "Décalage Haas", lo=-50, hi=100, step=0.5, dec=1, suffix=" ms",
@@ -707,7 +796,7 @@ class ReflTab(QtWidgets.QWidget):
         b.changed.connect(lambda a: self.changed.emit(False))
         b.section("Réflexions vers un écouteur")
         b.add("show_refl", "Afficher les chemins", "bool")
-        self.lst = QtWidgets.QComboBox()
+        self.lst = NoWheelCombo()
         self.lst.currentIndexChanged.connect(self._lst_changed)
         form.addRow("Écouteur", self.lst)
         b.add("refl_order", "Ordre max", "int", lo=1, hi=2)
