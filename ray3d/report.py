@@ -100,6 +100,10 @@ def export_analysis(app, path=None, image=None):
     if res is None:
         app.recompute()
         res = app._last_res
+    data = gather_analysis(app)
+    vis = data["zone_vis"]
+    res = dict(res, zones=[z for z in res.get("zones", []) if vis.get(z.key, False)],
+               zone_plan={k: v for k, v in res.get("zone_plan", {}).items() if vis.get(k, False)})
     if image is None:
         dlg = SnapshotDialog(app, app.scene, res, camera_of(app.v3d))
         if not dlg.exec():
@@ -110,7 +114,6 @@ def export_analysis(app, path=None, image=None):
                                                         f"analyse_{_scene_name(app)}.pdf", "PDF (*.pdf)")
         if not path:
             return None
-    data = gather_analysis(app)
     data["image"] = image
     write_analysis(path, data)
     if hasattr(app, "status"):
@@ -134,8 +137,11 @@ def gather_analysis(app):
                                 placed=False, cfg=cfg)
     ctx = app.sbir_context()
     sb = app.compute_sbir() if ctx is not None else None
+    # zones minimales : pas affichées quand les panneaux sont posés (ou si masquées)
+    zone_vis = {z.key: not st.treat_hide_zones and T.zone_cfg(z, st)["on"]
+                and not (z.key in plans and plans[z.key]["placed"]) for z in zones}
     return dict(scene=sc, name=_scene_name(app), units=st.pdf_units, zones=zones, plans=plans, sbir=sb,
-                ctx=ctx, tctx=tctx)
+                ctx=ctx, tctx=tctx, zone_vis=zone_vis, traps=T.bass_traps(sc))
 
 
 def write_analysis(path, data):
@@ -148,13 +154,13 @@ def write_analysis(path, data):
         _page_sbir(doc, data)
     doc.new_page("Plan de la pièce (vue de dessus)")
     _page_plan(doc, data)
-    zones = data["zones"]
-    if zones:
-        for z in zones:                          # une paroi par page (échelle 1:20 à 1:50)
-            doc.new_page(("Élévation" if z.kind == "wall" else "Plan") +
-                         f" · {z.label} · zone minimale et panneaux (hors bass traps)")
-            _elevation(doc, data, z, (doc.M, doc.top, doc.W - 2 * doc.M, doc.H - 13 - doc.top))
-        doc.new_page("Liste des panneaux")
+    zones = [z for z in data["zones"] if data["zone_vis"].get(z.key) or z.key in data["plans"]]
+    for z in zones:                              # une paroi par page (échelle 1:20 à 1:50)
+        what = "zone minimale et panneaux" if data["zone_vis"].get(z.key) else "panneaux"
+        doc.new_page(("Élévation" if z.kind == "wall" else "Plan") + f" · {z.label} · {what}")
+        _elevation(doc, data, z, (doc.M, doc.top, doc.W - 2 * doc.M, doc.H - 13 - doc.top))
+    if data["plans"] or data["traps"]:
+        doc.new_page("Liste des panneaux et bass traps")
         _panel_list(doc, data)
     doc.finish()
     return path
@@ -189,12 +195,16 @@ def _page_summary(doc, data):
                               f"(direct seul {devd:.1f} dB) · {len(sb['rows'])} réflexion(s), ordre ≤ "
                               f"{st.sbir_order}", 8) + 1.5
     zones = data["zones"]
+    shown = [z for z in zones if data["zone_vis"].get(z.key)]
     if zones:
-        area = sum(z.w * z.h for z in zones)
         npan = sum(len(p["rects"]) for p in data["plans"].values())
         placed = any(p["placed"] for p in data["plans"].values())
-        y = doc.para(x, y, w, f"Traitement : {len(zones)} zone(s) minimale(s), {area:.2f} m² · {npan} panneau(x) "
-                              f"{'posé(s)' if placed else 'prévu(s)'} (hors bass traps)", 8, bold=True) + 1.5
+        txt = f"Traitement : {npan} panneau(x) {'posé(s)' if placed else 'prévu(s)'}"
+        if shown:
+            txt += f" · {len(shown)} zone(s) minimale(s), {sum(z.w * z.h for z in shown):.2f} m²"
+        if data["traps"]:
+            txt += f" · {len(data['traps'])} bass trap(s)"
+        y = doc.para(x, y, w, txt, 8, bold=True) + 1.5
     doc.top = max(doc.top, y0 + 106)
     # enceintes
     objs = _speakers(data)
@@ -206,11 +216,32 @@ def _page_summary(doc, data):
                          f"{getattr(o, 'az', 0):.1f}°", f"{getattr(o, 'el', 0):.1f}°"])
         doc.table(["Enceinte", "Modèle", f"X ({units})", f"Y ({units})", f"Z ({units})", "Azimut", "Site"], rows,
                   [40, 55, 24, 24, 24, 20, 20], right_cols=(2, 3, 4, 5, 6), title="Enceintes analysées")
-    if zones:
+    if shown:
         rows = [[f"{z.abbr}", z.label, f"{fmt_len(z.w, units)} × {fmt_len(z.h, units)}", _zone_pos(z, units),
-                 f"{z.level:+.1f} dB"] for z in zones]
+                 f"{z.level:+.1f} dB"] for z in shown]
         doc.table(["Repère", "Paroi", f"Zone minimale ({units})", "Position", "Niveau"], rows, [16, 34, 40, 120, 20],
                   bold_cols=(2, 3), right_cols=(4,), title="Zones minimales à traiter")
+    rows = []
+    for z in zones:
+        p = data["plans"].get(z.key)
+        if not p or not p["placed"] or not p["rects"]:
+            continue
+        R = np.array([r[:4] for r in p["rects"]], float)
+        extra = f" · suspendus à {fmt_len(p['cfg'].get('drop', 0.0), units)}" if z.kind == "ceiling" else ""
+        rows.append([z.abbr, z.label, str(len(R)), f"{fmt_len(R[0, 2], units)} × {fmt_len(R[0, 3], units)} × "
+                     f"{fmt_len(p['cfg']['t'], units)}", _block_pos(z, R, units) + extra])
+    if rows:
+        doc.table(["Repère", "Paroi", "Qté", f"Panneau ({units})", "Bloc"], rows, [16, 34, 12, 42, 126],
+                  bold_cols=(3,), right_cols=(2,), title="Panneaux posés")
+
+
+def _block_pos(z, R, units):
+    bu, bv = R[:, 0].min(), R[:, 1].min()
+    bw, bh = (R[:, 0] + R[:, 2]).max() - bu, (R[:, 1] + R[:, 3]).max() - bv
+    if z.kind == "wall":
+        return (f"{fmt_len(bw, units)} × {fmt_len(bh, units)} · à {fmt_len(bu, units)} du coin gauche, "
+                f"{fmt_len(bv, units)} du sol")
+    return f"{fmt_len(bw, units)} × {fmt_len(bh, units)} · X {fmt_len(bu, units)} · Y {fmt_len(bv, units)}"
 
 
 def _speakers(data):
@@ -314,7 +345,7 @@ def _plan_items(data):
     _, tids = T.treatment_ids(sc)
     rooms = _rooms(sc)
     objs = [s for s in sc.shapes if s.kind != "Pièce" and s.id not in tids]
-    panels = [s for s in sc.shapes if s.id in tids]
+    panels = [s for s in sc.shapes if s.id in tids and getattr(s, "role", "") != "bass_trap"]
     return rooms, objs, panels
 
 
@@ -343,7 +374,17 @@ def _page_plan(doc, data):
         else:
             fr.poly(Hh, 0.2, ACCENT, fill=PANEL_FILL)
             fr.poly(Hh, 0.25, ACCENT)
+    for s in data["traps"]:                       # bass traps : hachurés
+        V = np.vstack([f.verts for f in s.faces()])
+        Hh = _hull(V[:, :2])
+        doc.p.setBrush(QtGui.QBrush(QtGui.QColor("#6b4f9e"), Qt.BrushStyle.BDiagPattern))
+        doc.p.setPen(doc.pen(0.3, QtGui.QColor("#6b4f9e")))
+        doc.p.drawPolygon(QtGui.QPolygonF([doc.q(*fr.pt(a, b)) for a, b in Hh]))
+        c = V.mean(0)
+        fr.text(c[0], c[1], s.name, 6, True, QtGui.QColor("#6b4f9e"))
     for z in data["zones"]:
+        if not data["zone_vis"].get(z.key):
+            continue
         u0, v0, u1, v1 = z.rect
         C = z.to3([[u0, v0], [u1, v0], [u1, v1], [u0, v1]])
         if z.kind == "wall":
@@ -395,6 +436,10 @@ def _page_plan(doc, data):
         rows.append(["Écoute", fmt_len(L[0] - x0, units), fmt_len(L[1] - y0, units), fmt_len(L[2] - lo[2], units)])
     for o in _speakers(data):
         rows.append([o.name, fmt_len(o.x - x0, units), fmt_len(o.y - y0, units), fmt_len(o.z - lo[2], units)])
+    for s in data["traps"]:
+        q = s.corners().min(0)
+        rows.append([s.name + " (bass trap)", fmt_len(q[0] - x0, units), fmt_len(q[1] - y0, units),
+                     fmt_len(q[2] - lo[2], units)])
     for a in sc.assemblies:
         if a.parent or a.id == sc.settings.treat_assembly:
             continue
@@ -406,8 +451,7 @@ def _page_plan(doc, data):
     doc.table(["Élément", "X", "Y", "Z"], rows, [35, 14, 14, 14], x=X0, size=6.5, right_cols=(1, 2, 3))
     doc.para(X0, doc.top, 77, f"Cotes en {units}, depuis le coin X min / Y min de la pièce "
                               f"({x0:.3f}, {y0:.3f}) et depuis le sol. Trait jaune épais : zone minimale à traiter "
-                              f"(tirets : plafond). Orange : panneaux (tirets : plafond). Les bass traps ne sont pas "
-                              f"représentés.",
+                              f"(tirets : plafond). Orange : panneaux (tirets : plafond). Violet hachuré : bass traps.",
              6.5, DIM_INK)
 
 
@@ -416,10 +460,15 @@ def _elevation(doc, data, z, box):
     sc, units = data["scene"], data["units"]
     x, y, w, h = box
     plan = data["plans"].get(z.key)
+    vis = data["zone_vis"].get(z.key, False)
     view = "vue de l'intérieur" if z.kind == "wall" else "vue en plan (depuis le dessus)"
     doc.text(x, y + 4, f"{z.abbr} · {z.label} — {view}", 8.5, True)
-    doc.text(x + w, y + 4, f"zone minimale {fmt_len(z.w, units)} × {fmt_len(z.h, units)} {units} · "
-                           f"{_zone_pos(z, units)}", 7.5, True, ZONE, "right")
+    if vis:
+        doc.text(x + w, y + 4, f"zone minimale {fmt_len(z.w, units)} × {fmt_len(z.h, units)} {units} · "
+                               f"{_zone_pos(z, units)}", 7.5, True, ZONE, "right")
+    elif plan and plan["rects"]:
+        R = np.array([r[:4] for r in plan["rects"]], float)
+        doc.text(x + w, y + 4, f"bloc de panneaux {_block_pos(z, R, units)} {units}", 7.5, True, ACCENT, "right")
     fr = Frame(doc, (x, y + 6, w, h - 8), (0, 0), (z.W, z.H), margin=16)
     fr.poly(z.poly, 0.5, INK)
     if z.kind != "wall":                     # repères au sol / plafond
@@ -437,7 +486,7 @@ def _elevation(doc, data, z, box):
             q = fr.pt(L[0], L[1]); doc.circle(q[0], q[1], 1.5, 0.2, LIGHT)
     else:
         doc.text(fr.pt(0, 0)[0] + 1, fr.pt(0, 0)[1] - 1.2, "sol", 6, False, LIGHT)
-    if z.pts is not None and len(z.pts):
+    if vis and z.pts is not None and len(z.pts):
         dot = QtGui.QColor(ZONE); dot.setAlpha(90)
         for p in z.pts[:: max(1, len(z.pts) // 200)]:
             q = fr.pt(*p)
@@ -450,17 +499,17 @@ def _elevation(doc, data, z, box):
             fr.poly([(pu, pv), (pu + pw, pv), (pu + pw, pv + ph), (pu, pv + ph)], 0.3, ACCENT)
             if pw * fr.s > 14 and ph * fr.s > 5:
                 fr.text(pu + pw / 2, pv + ph / 2, r[4] if len(r) > 4 else "", 5.5, False, ACCENT)
-    fr.poly([(u0, v0), (u1, v0), (u1, v1), (u0, v1)], 0.9, ZONE)
     # cotes de la paroi
     fr.dim((0, 0), (z.W, 0), -9, fmt_len(z.W, units), 7, INK, True)
     fr.dim((0, z.H), (0, 0), -9, fmt_len(z.H, units), 7, INK, True)
-    # zone minimale (en haut / à droite), en gras
-    if u0 > 1e-4:
-        fr.dim((0, v1), (u0, v1), 4, fmt_len(u0, units), 6.5, ZONE, True)
-    fr.dim((u0, v1), (u1, v1), 4, fmt_len(u1 - u0, units), 6.5, ZONE, True)
-    if v0 > 1e-4:
-        fr.dim((u1, 0), (u1, v0), -4, fmt_len(v0, units), 6.5, ZONE, True)
-    fr.dim((u1, v0), (u1, v1), -4, fmt_len(v1 - v0, units), 6.5, ZONE, True)
+    if vis:                                  # zone minimale (en haut / à droite), en gras
+        fr.poly([(u0, v0), (u1, v0), (u1, v1), (u0, v1)], 0.9, ZONE)
+        if u0 > 1e-4:
+            fr.dim((0, v1), (u0, v1), 4, fmt_len(u0, units), 6.5, ZONE, True)
+        fr.dim((u0, v1), (u1, v1), 4, fmt_len(u1 - u0, units), 6.5, ZONE, True)
+        if v0 > 1e-4:
+            fr.dim((u1, 0), (u1, v0), -4, fmt_len(v0, units), 6.5, ZONE, True)
+        fr.dim((u1, v0), (u1, v1), -4, fmt_len(v1 - v0, units), 6.5, ZONE, True)
     # panneaux : bloc (en bas / à gauche)
     if plan and plan["rects"]:
         R = np.array([r[:4] for r in plan["rects"]], float)
@@ -478,9 +527,12 @@ def _elevation(doc, data, z, box):
             fr.dim((bu, b), (bu, a), -4, fmt_len(b - a, units), 6.0, ACCENT)
         n = len(R)
         t = plan["cfg"]["t"]
+        hang = ""
+        if z.kind == "ceiling":
+            hang = f" · suspendus : dessus à {fmt_len(plan['cfg'].get('drop', 0.0), units)} sous le plafond"
         doc.text(x, y + h - 1, f"{n} panneau(x) {fmt_len(R[0, 2], units)} × {fmt_len(R[0, 3], units)} × "
                                f"{fmt_len(t, units)} {units} · bloc {fmt_len(bu1 - bu, units)} × "
-                               f"{fmt_len(bv1 - bv, units)} · {'posés' if plan['placed'] else 'prévus'}",
+                               f"{fmt_len(bv1 - bv, units)} · {'posés' if plan['placed'] else 'prévus'}{hang}",
                  7, True, ACCENT)
     elif plan is None:
         doc.text(x, y + h - 1, "Zone non traitée", 7, False, DIM_INK)
@@ -503,15 +555,37 @@ def _panel_list(doc, data):
                 p1, p2 = f"u {fmt_len(pu, units)}", f"v {fmt_len(pv, units)}"
             else:
                 p1, p2 = f"X {fmt_len(pu, units)}", f"Y {fmt_len(pv, units)}"
+            hang = fmt_len(plan["cfg"].get("drop", 0.0), units) if z.kind == "ceiling" else ""
             rows.append([name, z.label, f"{fmt_len(pw, units)} × {fmt_len(ph, units)} × {fmt_len(t, units)}", p1, p2,
-                         "posé" if plan["placed"] else "prévu"])
+                         hang, "posé" if plan["placed"] else "prévu"])
             total += 1
             area += pw * ph
-    doc.table(["Repère", "Paroi", f"Dimensions L × H × ép. ({units})", "Position (gauche / X)",
-               "Position (bas / Y)", "État"], rows, [24, 40, 60, 46, 46, 20], bold_cols=(2,))
-    doc.text(doc.M, doc.top + 2, f"{total} panneau(x) · {area:.2f} m² · absorption {data['scene'].settings.treat_alpha:.2f}"
-                                 " · positions du coin bas gauche de chaque panneau (mur vu de l'intérieur), "
-                                 "ou depuis le coin X min / Y min de la pièce au sol / plafond.", 7.5, True)
+    if rows:
+        doc.table(["Repère", "Paroi", f"Dimensions L × H × ép. ({units})", "Position (gauche / X)",
+                   "Position (bas / Y)", "Suspension", "État"], rows, [24, 40, 58, 42, 42, 24, 20], bold_cols=(2,))
+        doc.para(doc.M, doc.top, doc.W - 2 * doc.M,
+                 f"{total} panneau(x) · {area:.2f} m² · absorption {data['scene'].settings.treat_alpha:.2f} · positions du "
+                 "coin bas gauche de chaque panneau (mur vu de l'intérieur), ou depuis le coin X min / Y min de la "
+                 "pièce au sol / plafond. Suspension : distance entre le plafond et le dessus du panneau.", 7.5,
+                 bold=True)
+        doc.top += 10
+    traps = data["traps"]
+    if traps:
+        sc = data["scene"]
+        rooms = _rooms(sc)
+        P = np.vstack([f.verts for r in rooms for f in r.faces()]) if rooms else np.zeros((1, 3))
+        o = P.min(0)
+        trows = []
+        for s in traps:
+            Q = s.outline()
+            e = Q.max(0) - Q.min(0)
+            q = s.corners().min(0) - o
+            trows.append([s.name, f"{len(s.profile)} pts" + (" · arc" if any(abs(a) > 1e-9 for a in s.arcs) else ""),
+                          f"{fmt_len(e[0], units)} × {fmt_len(e[1], units)}", fmt_len(s.height, units),
+                          f"X {fmt_len(q[0], units)} · Y {fmt_len(q[1], units)} · Z {fmt_len(q[2], units)}",
+                          f"{s.absorption:.2f}"])
+        doc.table(["Bass trap", "Profil", f"Encombrement ({units})", "Hauteur", "Coin min (depuis l'origine)", "α"],
+                  trows, [30, 30, 40, 22, 90, 14], bold_cols=(2,), right_cols=(3, 5), title="Bass traps")
 
 
 # =========================================================================== plans de découpe

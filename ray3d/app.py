@@ -118,10 +118,14 @@ class MainWindow(QtWidgets.QMainWindow):
         eye_btn = QtWidgets.QToolButton(); eye_btn.setText("À l'écouteur")
         eye_btn.setToolTip("Se placer à l'écouteur sélectionné (ou au premier)")
         eye_btn.clicked.connect(self.go_listener)
+        self.orbit_btn = QtWidgets.QToolButton(); self.orbit_btn.setText("Orbite écouteur")
+        self.orbit_btn.setCheckable(True)
+        self.orbit_btn.setToolTip("Ancre la rotation de la caméra sur l'écouteur sélectionné (ou le premier)")
+        self.orbit_btn.toggled.connect(lambda on: self.update_anchor())
         fit_btn = QtWidgets.QToolButton(); fit_btn.setText("Recadrer")
         fit_btn.clicked.connect(lambda: self.v3d.fit(self.scene))
 
-        self.p3d = ViewPane(self.v3d, "3D", [self.walk_btn, eye_btn, fit_btn])
+        self.p3d = ViewPane(self.v3d, "3D", [self.walk_btn, eye_btn, self.orbit_btn, fit_btn])
         self.ptop = ViewPane(self.vtop, "DESSUS · XY", [self.legend])
         self.pside = ViewPane(self.vside, "CÔTÉ · XZ (coupe)")
         for p in (self.p3d, self.ptop, self.pside):
@@ -185,6 +189,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tab_treat.remove.connect(self.remove_treatment)
         self.tab_treat.export_pdf.connect(self.export_analysis_pdf)
         self.tab_treat.export_desk.connect(self.export_cutlist_pdf)
+        self.tab_treat.add_bass_trap.connect(self.add_bass_trap)
+        self._corners = []
         tabs.currentChanged.connect(lambda _: self.schedule())
         self.tabs = tabs
         for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
@@ -306,6 +312,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.toggle_max(self.maxed)
         elif self.isFullScreen():
             self.showNormal()
+
+    def anchor_listener(self):
+        sc = self.scene
+        l = sc.listener(self.sel)
+        if l is None:
+            l = next((x for x in sc.listeners if x.id == getattr(self, "_anchor_id", None)), None)
+        if l is None and sc.listeners:
+            l = sc.listeners[0]
+        return l
+
+    def update_anchor(self):
+        l = self.anchor_listener() if self.orbit_btn.isChecked() else None
+        self._anchor_id = l.id if l else None
+        self.v3d.set_anchor(l.pos if l else None)
 
     def go_listener(self):
         sc = self.scene
@@ -644,6 +664,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status.setText(f"{n} panneau(x) retiré(s)")
         self.schedule(True)
 
+    def add_bass_trap(self, opts):
+        cs = self._corners or T.room_corners(self.scene)
+        i = opts.get("corner", 0)
+        if not cs or not (0 <= i < len(cs)):
+            QtWidgets.QMessageBox.information(self, "Bass trap", "Aucun angle de pièce trouvé.")
+            return
+        st = self.scene.settings
+        sh = T.make_bass_trap(self.scene, cs[i], opts["kind"], st.bt_size, opts.get("height", 0.0), st.bt_alpha)
+        self.sel = sh.id
+        self.multi = {sh.id}
+        self.status.setText(f"{sh.name} ajouté ({cs[i]['label']})")
+        self.schedule(True)
+        self.select(sh.id)
+
     def export_analysis_pdf(self):
         from .report import export_analysis
         export_analysis(self)
@@ -676,6 +710,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if st.show_rays:
             rs = sel_active if st.rays_selection_only else active
             rays = A.trace_rays(geo, rs, st.nrays, st.max_order, st.ray_len) if rs else None
+            if rays is not None and st.rays_listener_only:
+                tg = [(l.pos, l.head_d / 2 if l.head else st.rays_capture) for l in sc.listeners]
+                rays = A.rays_reaching(rays, tg) if tg else None
 
         cones = {}
         if st.show_cov:
@@ -732,12 +769,17 @@ class MainWindow(QtWidgets.QMainWindow):
                     zone_plan[z.key] = T.layout(z, cfg, st.treat_gap)["rects"]
             if treat_tab:
                 self.tab_treat.show_result(zones, placed)
+                fwd = T.forward_dir(tctx["sources"], tctx["listener"]) if tctx is not None else None
+                self._corners = T.room_corners(sc, tctx["listener"] if tctx is not None else None, fwd)
+                self.tab_treat.set_corners(self._corners, T.bass_traps(sc))
                 if tctx is not None:
                     names = sorted({s.name.split(" · ")[0] for s in tctx["sources"]})
                     self.tab_treat.set_context(f"Écoute « {tctx['listener_obj'].name} » · "
                                                f"{', '.join(names[:6])}")
                 else:
                     self.tab_treat.set_context("Ajoutez un écouteur et des enceintes.")
+            if st.treat_hide_zones:
+                zones, zone_plan = [], {}
         corners = None
         k0, o0 = sc.find(self.sel) if self.sel else (None, None)
         if k0 in ("shape", "assembly", "object") and o0 is not None:
@@ -748,6 +790,10 @@ class MainWindow(QtWidgets.QMainWindow):
                    range=(vmin, vmax), src_by_id={s.id: s for s in sc.sources},
                    corners=corners, markers=self.markers, zones=zones, zone_plan=zone_plan)
         self._last_res = res
+        if self.orbit_btn.isChecked():
+            l = self.anchor_listener()
+            self._anchor_id = l.id if l else None
+            self.v3d.anchor = l.pos if l else None
         selset = self.selection_ids()
         self.v3d.render(sc, res, selset)
         self.vtop.render(sc, res, selset)

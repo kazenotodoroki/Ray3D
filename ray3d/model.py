@@ -78,7 +78,16 @@ class Shape:
     assembly: str = ""             # ensemble (objet composé) auquel la forme appartient
     locked: bool = False
     arcs: list = field(default_factory=list)          # flèche par segment du profil (0 = droit)
+    role: str = ""                 # "" ou "bass_trap" (traitement acoustique)
     id: str = field(default_factory=new_id)
+
+    @property
+    def is_bass_trap(self):
+        return self.role == "bass_trap"
+
+    @is_bass_trap.setter
+    def is_bass_trap(self, v):
+        self.role = "bass_trap" if v else ""
 
     def faces(self):
         a, b, e = G.PLANES.get(self.plane, G.PLANES["XY"])
@@ -346,6 +355,8 @@ class Listener:
     y: float = 0.0
     z: float = 1.2
     locked: bool = False
+    head: bool = False             # sphère de la taille d'une tête
+    head_d: float = 0.18           # diamètre de la tête (m)
     id: str = field(default_factory=new_id)
 
     @property
@@ -393,6 +404,8 @@ class Settings:
     cone_alpha: float = 0.18
     show_rays: bool = True
     rays_selection_only: bool = True
+    rays_listener_only: bool = False
+    rays_capture: float = 0.25
     nrays: int = 40
     max_order: int = 2
     ray_len: float = 80.0
@@ -451,6 +464,12 @@ class Settings:
     treat_gap: float = 0.0
     treat_panels: dict = field(default_factory=dict)
     treat_assembly: str = ""
+    treat_zone_assy: dict = field(default_factory=dict)
+    treat_hide_zones: bool = False
+    treat_ceiling_drop: float = 0.0
+    bt_size: float = 0.60
+    bt_alpha: float = 0.95
+    cam_orbit: bool = False
     # export PDF
     pdf_units: str = "mm"
 

@@ -77,6 +77,8 @@ class SbirTab(QtWidgets.QWidget):
         b.add("sbir_order", "Ordre des réflexions", "int", lo=1, hi=4,
               tip="1 à 4 rebonds. Les ordres 3 et 4 prennent un peu plus de temps de calcul.")
         b.add("sbir_show_paths", "Afficher les chemins dans les vues", "bool")
+        b.add("treat_hide_zones", "Masquer les zones minimales de traitement (jaunes)", "bool",
+              tip="Les zones de l'onglet TRAITEMENT, par exemple une fois les panneaux posés.")
 
         b.section("Réponse au point d'écoute")
         b.add("sbir_fmin", "Fréquence min", lo=10, hi=5000, step=5, dec=0, suffix=" Hz")

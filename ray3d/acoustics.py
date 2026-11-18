@@ -243,8 +243,9 @@ def trace_rays(geo: Geometry, sources, nrays, max_order, max_len):
         dd = sample_dirs(s, nrays)
         o.append(np.repeat(s.pos[None], len(dd), 0)); d.append(dd); sid.append(np.full(len(dd), k))
     o, d, sid = np.vstack(o), np.vstack(d), np.concatenate(sid)
+    rid = np.arange(len(o))
     E = np.ones(len(o)); rem = np.full(len(o), float(max_len))
-    out = dict(p0=[], p1=[], order=[], energy=[], sid=[])
+    out = dict(p0=[], p1=[], order=[], energy=[], sid=[], rid=[])
     for order in range(max_order + 1):
         if len(o) == 0:
             break
@@ -253,17 +254,59 @@ def trace_rays(geo: Geometry, sources, nrays, max_order, max_len):
         tt = np.where(hit, t, rem)
         p1 = o + d * tt[:, None]
         out["p0"].append(o); out["p1"].append(p1); out["order"].append(np.full(len(o), order))
-        out["energy"].append(E); out["sid"].append(sid)
+        out["energy"].append(E); out["sid"].append(sid); out["rid"].append(rid)
         if order == max_order or geo.M == 0:
             break
         n = geo.N[idx[hit]]
         dd = d[hit]
         d = dd - 2 * (dd * n).sum(1)[:, None] * n
         o = p1[hit]; E = E[hit] * (1 - geo.A[idx[hit]])
-        rem = rem[hit] - tt[hit]; sid = sid[hit]
+        rem = rem[hit] - tt[hit]; sid = sid[hit]; rid = rid[hit]
     res = {k: np.concatenate(v) for k, v in out.items()}
     res["sources"] = sources
     return res
+
+
+def rays_reaching(R, targets):
+    """Garde les rayons qui passent à moins de r d'une cible (écouteur), coupés au point le plus proche.
+    targets : liste de (position, rayon). Renvoie un dict de même forme que trace_rays (+ 'hits')."""
+    if R is None or not len(R["p0"]) or not targets:
+        return R
+    p0, p1 = R["p0"], R["p1"]
+    d = p1 - p0
+    dd = np.maximum((d * d).sum(1), 1e-12)
+    best_t = np.full(len(p0), np.nan)
+    best_q = np.zeros_like(p0)
+    best_dist = np.full(len(p0), np.inf)
+    for L, r in targets:
+        L = np.asarray(L, float)
+        t = np.clip(((L - p0) * d).sum(1) / dd, 0.0, 1.0)
+        q = p0 + d * t[:, None]
+        dist = np.linalg.norm(q - L, axis=1)
+        m = (dist <= r) & (dist < best_dist)
+        best_dist[m], best_t[m], best_q[m] = dist[m], t[m], q[m]
+    hit = np.isfinite(best_dist)
+    if not hit.any():
+        out = {k: (v[:0] if isinstance(v, np.ndarray) else v) for k, v in R.items()}
+        out["hits"] = 0
+        return out
+    rid, order = R["rid"], R["order"]
+    first = {}
+    for i in np.nonzero(hit)[0]:                    # premier passage de chaque rayon
+        k = int(rid[i])
+        if k not in first or order[i] < order[first[k]]:
+            first[k] = i
+    lim = np.full(int(rid.max()) + 1, -1)
+    for k, i in first.items():
+        lim[k] = order[i]
+    keep = (lim[rid] >= 0) & (order <= lim[rid])
+    out = {k: (v[keep] if isinstance(v, np.ndarray) and len(v) == len(p0) else v) for k, v in R.items()}
+    out["p1"] = out["p1"].copy()
+    idx = np.array(sorted(first.values()))
+    pos = np.searchsorted(np.nonzero(keep)[0], idx)
+    out["p1"][pos] = best_q[idx]
+    out["hits"] = len(first)
+    return out
 
 
 def cone(s, geo: Geometry, rng: float, clip=True, npts=48):

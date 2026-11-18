@@ -285,6 +285,8 @@ class PropertyEditor(QtWidgets.QWidget):
             b.section("Acoustique")
             b.add("absorption", "Absorption α", lo=0, hi=1, step=0.05)
             b.add("audience", "Zone public (carte SPL)", "bool")
+            b.add("is_bass_trap", "Bass trap (traitement acoustique)", "bool",
+                  tip="Compte dans le traitement : conservé à la pose des panneaux, listé dans le PDF d'analyse.")
             self.info_lab = b.info()
             self._corners(form)
         elif k == "assembly":
@@ -361,6 +363,9 @@ class PropertyEditor(QtWidgets.QWidget):
             b.add("locked", "🔒 Position verrouillée", "bool")
             for a in ("x", "y", "z"):
                 b.add(a, a.upper(), enabled=not o.locked, **pos)
+            b.add("head", "Sphère de tête", "bool", tip="Affiche une sphère de la taille d'une tête ; sert "
+                  "aussi de cible pour « rayons qui atteignent l'écouteur ».")
+            b.add("head_d", "Diamètre de la tête", lo=0.05, hi=1, step=0.01, dec=3, suffix=" m")
             self._place_buttons(form, o.locked)
         if k == "object":
             self._corners(form)
@@ -487,6 +492,11 @@ class DisplayTab(QtWidgets.QWidget):
         b.section("Rayons")
         b.add("show_rays", "Lancer de rayons", "bool")
         b.add("rays_selection_only", "Seulement la sélection", "bool")
+        b.add("rays_listener_only", "Seulement ceux qui atteignent l'écouteur", "bool",
+              tip="Rayons passant à moins du rayon de capture d'un écouteur (ou dans sa sphère de tête), "
+                  "coupés à l'écouteur. Augmentez le nombre de rayons.")
+        b.add("rays_capture", "Rayon de capture", lo=0.01, hi=5, step=0.05, dec=2, suffix=" m",
+              tip="Utilisé pour les écouteurs sans sphère de tête.")
         b.add("nrays", "Rayons / source", "int", lo=1, hi=3000)
         b.add("max_order", "Réflexions max", "int", lo=0, hi=10)
         b.add("ray_len", "Longueur max", lo=1, hi=1000, step=5, dec=0, suffix=" m")

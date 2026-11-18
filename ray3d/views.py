@@ -300,6 +300,13 @@ class View2D(pg.PlotWidget):
 
         # --- écouteurs
         for l in scene.listeners:
+            if l.head:
+                a = np.linspace(0, 2 * np.pi, 49)
+                r = l.head_d / 2
+                c2 = self.P(l.pos[None])[0]
+                self._add(pg.PlotDataItem(c2[0] + r * np.cos(a), c2[1] + r * np.sin(a),
+                                          pen=pg.mkPen("#d9c7b3", width=1.4)), 34)
+        for l in scene.listeners:
             self._target(self.P(l.pos), "#e8e8e8", "listener", l.id, l.name, symbol="o", size=9,
                          sel=l.id in sel, movable=not getattr(l, "locked", False))
 
@@ -336,6 +343,13 @@ class View3D(gl.GLViewWidget):
         self.wtimer.timeout.connect(self._step)
         self._last = None
         self._scene_size = 30.0
+        self.anchor = None             # orbite ancrée sur un point (écouteur)
+
+    def set_anchor(self, pos):
+        self.anchor = None if pos is None else np.asarray(pos, float)
+        if self.anchor is not None and not self.walk:
+            self.opts["center"] = pg.Vector(*self.anchor)
+            self.update()
 
     # ------------------------------------------------------------------ navigation
     def set_walk(self, on: bool, eye=None):
@@ -415,7 +429,11 @@ class View3D(gl.GLViewWidget):
 
     def mouseMoveEvent(self, ev):
         if not self.walk:
-            return super().mouseMoveEvent(ev)
+            super().mouseMoveEvent(ev)
+            if self.anchor is not None:            # le panoramique ne déplace pas le centre d'orbite
+                self.opts["center"] = pg.Vector(*self.anchor)
+                self.update()
+            return
         if self._last is None:
             self._last = ev.position()
         d = ev.position() - self._last
@@ -467,7 +485,7 @@ class View3D(gl.GLViewWidget):
     def fit(self, scene: Scene):
         lo, hi = scene.bbox()
         self._lo, self._hi = lo, hi
-        c = (lo + hi) / 2
+        c = (lo + hi) / 2 if self.anchor is None else self.anchor
         size = float(np.linalg.norm(hi - lo))
         self._scene_size = size
         if self.walk:
@@ -628,6 +646,15 @@ class View3D(gl.GLViewWidget):
             self._add(sp)
             for l in scene.listeners:
                 self._add(gl.GLTextItem(pos=l.pos + np.array([0, 0, 0.4]), text=l.name, color=qcolor(S.TEXT), font=font))
+                if l.head:
+                    md = gl.MeshData.sphere(rows=14, cols=28, radius=max(l.head_d, 0.01) / 2)
+                    m = gl.GLMeshItem(meshdata=md, smooth=True, shader="shaded",
+                                      color=(0.95, 0.85, 0.75, 1.0) if l.id in sel else (0.85, 0.78, 0.7, 0.9))
+                    m.setGLOptions("opaque")
+                    m.translate(*l.pos)
+                    self._add(m)
+        if self.anchor is not None and not self.walk:
+            self.opts["center"] = pg.Vector(*self.anchor)
 
         if not self._fitted:
             self.fit(scene)

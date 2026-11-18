@@ -96,14 +96,43 @@ class Zone:
 
 
 # --------------------------------------------------------------------------- géométrie
+BT_NAME = "Bass traps"
+BT_KINDS = ["Triangle d'angle", "Arrondi d'angle", "Carré d'angle"]
+
+
 def treatment_ids(scene):
-    """Ensembles et formes du traitement posé (exclus du calcul des zones)."""
+    """Ensembles et formes du traitement (panneaux et bass traps), exclus du calcul des zones."""
     aid = getattr(scene.settings, "treat_assembly", "")
     a = scene.assembly(aid) if aid else None
+    sids = {s.id for s in scene.shapes if getattr(s, "role", "") == "bass_trap"}
     if a is None:
-        return set(), set()
+        return set(), sids
     subs = {x.id for x in scene.descendant_assemblies(a.id)} | {a.id}
-    return subs, {s.id for s in scene.all_shapes_in(a.id)}
+    return subs, sids | {s.id for s in scene.all_shapes_in(a.id)}
+
+
+def panel_assemblies(scene):
+    """Sous-ensembles de panneaux posés : {zone.key: assembly}."""
+    out = {}
+    for key, aid in (scene.settings.treat_zone_assy or {}).items():
+        a = scene.assembly(aid)
+        if a is not None:
+            out[key] = a
+    return out
+
+
+def bass_traps(scene):
+    return [s for s in scene.shapes if getattr(s, "role", "") == "bass_trap"]
+
+
+def treatment_root(scene, create=True):
+    st = scene.settings
+    a = scene.assembly(st.treat_assembly) if st.treat_assembly else None
+    if a is None and create:
+        a = Assembly(name=TREAT_NAME)
+        scene.assemblies.insert(0, a)
+        st.treat_assembly = a.id
+    return a
 
 
 def bare_geometry(scene):
@@ -265,8 +294,11 @@ def compute_zones(scene, sources, L, opts):
 
 # --------------------------------------------------------------------------- panneaux
 def default_cfg(zone, st):
-    return dict(on=True, size=("Zone entière (1 panneau)" if zone.kind == "floor" else st.treat_size),
-                w=1.2, h=0.6, orient="Auto", t=(0.01 if zone.kind == "floor" else st.treat_thick))
+    """Réglages par défaut d'une zone ; le sol n'est pas traité par défaut (option)."""
+    return dict(on=zone.kind != "floor",
+                size=("Zone entière (1 panneau)" if zone.kind == "floor" else st.treat_size),
+                w=1.2, h=0.6, orient="Auto", t=(0.01 if zone.kind == "floor" else st.treat_thick),
+                drop=(st.treat_ceiling_drop if zone.kind == "ceiling" else 0.0))
 
 
 def zone_cfg(zone, st):
@@ -314,19 +346,39 @@ def _overlap(r1, r2):
 
 
 def remove_treatment(scene):
-    aids, sids = treatment_ids(scene)
+    """Retire les panneaux posés (les bass traps restent)."""
+    st = scene.settings
+    aids, sids = set(), set()
+    for a in panel_assemblies(scene).values():
+        aids |= {a.id} | {x.id for x in scene.descendant_assemblies(a.id)}
+        sids |= {s.id for s in scene.all_shapes_in(a.id) if getattr(s, "role", "") != "bass_trap"}
+    # anciennes scènes : panneaux rangés sans table de correspondance
+    root = treatment_root(scene, create=False)
+    if root is not None and not st.treat_zone_assy:
+        for a in scene.sub_assemblies(root.id):
+            if a.name.startswith("Panneaux"):
+                aids |= {a.id} | {x.id for x in scene.descendant_assemblies(a.id)}
+                sids |= {s.id for s in scene.all_shapes_in(a.id)}
     scene.shapes = [s for s in scene.shapes if s.id not in sids]
     scene.assemblies = [a for a in scene.assemblies if a.id not in aids]
-    scene.settings.treat_assembly = ""
+    st.treat_zone_assy = {}
+    if root is not None and not scene.all_shapes_in(root.id):
+        scene.assemblies = [a for a in scene.assemblies if a.id != root.id]
+        st.treat_assembly = ""
     return len(sids)
 
 
 def place_panels(scene, zones, gap=0.0):
-    """Crée les panneaux (formes « Objet ») dans un ensemble « Traitement acoustique »."""
+    """Crée les panneaux (formes « Objet ») dans l'ensemble « Traitement acoustique »,
+    un sous-ensemble par paroi. Les bass traps déjà posés sont conservés."""
     st = scene.settings
     remove_treatment(scene)
     root = Assembly(name=TREAT_NAME)
+    old = treatment_root(scene, create=False)
+    if old is not None:
+        root = old
     created = []
+    mapping = {}
     for z in zones:
         cfg = zone_cfg(z, st)
         if not cfg["on"]:
@@ -346,7 +398,8 @@ def place_panels(scene, zones, gap=0.0):
                            height=t, x=pos[0], y=pos[1], z=pos[2], rot=rot, absorption=st.treat_alpha,
                            assembly=sub.id)
             else:
-                zz = P0[2] if z.kind == "floor" else P0[2] - t
+                drop = max(float(cfg.get("drop", 0.0)), 0.0)
+                zz = P0[2] if z.kind == "floor" else P0[2] - drop - t
                 sh = Shape(name=name, kind="Objet", plane="XY", profile=[[0, 0], [w, 0], [w, h], [0, h]],
                            height=t, x=P0[0], y=P0[1], z=zz, absorption=st.treat_alpha, assembly=sub.id)
             for k2 in ("x", "y", "z", "rot"):
@@ -354,20 +407,36 @@ def place_panels(scene, zones, gap=0.0):
             created.append(sh)
         if lay["rects"]:
             scene.assemblies.append(sub)
+            mapping[z.key] = sub.id
     if created:
-        scene.assemblies.insert(0, root)
+        if old is None:
+            scene.assemblies.insert(0, root)
         scene.shapes += created
         st.treat_assembly = root.id
+        st.treat_zone_assy = mapping
     return created
 
 
 def panel_rects(scene, zones):
     """Panneaux posés, en coordonnées (u, v) de chaque zone : {zone.key: [(u, v, w, h, name)]}."""
-    aid = scene.settings.treat_assembly
     out = {z.key: [] for z in zones}
+    subs = panel_assemblies(scene)
+    if subs:
+        for z in zones:
+            a = subs.get(z.key)
+            if a is None:
+                continue
+            for s in scene.all_shapes_in(a.id):
+                uv = z.to_uv(np.vstack([f.verts for f in s.faces()]))
+                lo, hi = uv.min(0), uv.max(0)
+                out[z.key].append((float(lo[0]), float(lo[1]), float(hi[0] - lo[0]), float(hi[1] - lo[1]), s.name))
+        return out
+    aid = scene.settings.treat_assembly
     if not aid or scene.assembly(aid) is None:
         return out
     for s in scene.all_shapes_in(aid):
+        if getattr(s, "role", "") == "bass_trap":
+            continue
         V = np.vstack([f.verts for f in s.faces()])
         best = None
         for z in zones:
@@ -384,3 +453,71 @@ def panel_rects(scene, zones):
             _, z, lo, hi = best
             out[z.key].append((float(lo[0]), float(lo[1]), float(hi[0] - lo[0]), float(hi[1] - lo[1]), s.name))
     return out
+
+
+# --------------------------------------------------------------------------- bass traps
+def room_corners(scene, L=None, fwd=None):
+    """Angles verticaux des pièces : dict(label, C, d1, d2, z0, H)."""
+    out = []
+    for sh in scene.shapes:
+        if sh.kind != "Pièce" or sh.plane != "XY":
+            continue
+        faces = {f.name: f for f in sh.faces()}
+        floor, ceil = faces.get("sol"), faces.get("plafond")
+        if floor is None or ceil is None:
+            continue
+        V = floor.verts
+        z0, z1 = float(V[:, 2].mean()), float(ceil.verts[:, 2].mean())
+        P = V[:, :2]
+        area = G.poly_area(P)
+        n = len(P)
+        for i in range(n):
+            C, prv, nxt = P[i], P[i - 1], P[(i + 1) % n]
+            d1, d2 = prv - C, nxt - C
+            if np.linalg.norm(d1) < 1e-6 or np.linalg.norm(d2) < 1e-6:
+                continue
+            d1, d2 = d1 / np.linalg.norm(d1), d2 / np.linalg.norm(d2)
+            cr = (nxt - C)[0] * (prv - C)[1] - (nxt - C)[1] * (prv - C)[0]
+            if cr * area < 0:                    # angle rentrant : pas de bass trap d'angle
+                continue
+            lab = f"Angle {len(out) + 1}"
+            if L is not None and fwd is not None:
+                left = np.cross(EZ, fwd)[:2]
+                v = C - np.asarray(L)[:2]
+                # fwd pointe de l'écoute vers les enceintes : l'avant est du côté des enceintes
+                lab = ("Angle avant " if v @ fwd[:2] > 0 else "Angle arrière ") + \
+                      ("gauche" if v @ left > 0 else "droit")
+            out.append(dict(label=lab, C=C, d1=d1, d2=d2, z0=z0, H=z1 - z0, room=sh.name))
+    return out
+
+
+def make_bass_trap(scene, corner, kind, size, height=0.0, alpha=0.95, name=None):
+    """Bass trap d'angle (prisme vertical), rangé dans « Traitement acoustique › Bass traps »."""
+    a = max(float(size), 0.05)
+    d1, d2 = corner["d1"], corner["d2"]
+    P1, P2 = a * d1, a * d2
+    prof = [[0.0, 0.0], list(P1), list(P2)]
+    arcs = []
+    if kind == "Carré d'angle":
+        prof = [[0.0, 0.0], list(P1), list(P1 + P2), list(P2)]
+    elif kind == "Arrondi d'angle":
+        c = float(np.linalg.norm(P2 - P1))
+        M = (P1 + P2) / 2
+        d = (P2 - P1) / c
+        nrm = np.array([-d[1], d[0]])
+        sag = 0.2 * c
+        arcs = [0.0, sag if nrm @ M > 0 else -sag, 0.0]
+    H = float(height) if height and height > 0 else corner["H"]
+    st = scene.settings
+    root = treatment_root(scene)
+    bt = next((x for x in scene.sub_assemblies(root.id) if x.name == BT_NAME), None)
+    if bt is None:
+        bt = Assembly(name=BT_NAME, parent=root.id)
+        scene.assemblies.append(bt)
+    n = len(bass_traps(scene)) + 1
+    sh = Shape(name=name or f"BT-{n}", kind="Objet", plane="XY",
+               profile=[[round(float(x), 6) + 0.0 for x in p] for p in prof], height=H,
+               x=float(corner["C"][0]), y=float(corner["C"][1]), z=corner["z0"], absorption=alpha,
+               assembly=bt.id, arcs=arcs, role="bass_trap")
+    scene.shapes.append(sh)
+    return sh

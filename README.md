@@ -25,6 +25,10 @@ python run.py scene.json   # ouvrir une scène enregistrée
   double-clic sur son titre, Échap pour revenir). F11 met la fenêtre en plein écran.
 - **Balade en 3D** : bouton « Balade », puis ZQSD / WASD ou flèches, E / C pour monter et descendre,
   Maj pour courir, glisser pour regarder. « À l'écouteur » place la caméra à un point d'écoute.
+  « Orbite écouteur » ancre la rotation de la caméra sur l'écouteur sélectionné (ou le premier) :
+  on tourne et on zoome autour de lui, et l'ancre suit l'écouteur s'il bouge.
+- **Écouteur avec tête** : case « Sphère de tête » dans les propriétés d'un point d'écoute
+  (diamètre 18 cm par défaut, réglable).
 - **Vue de l'extérieur** : depuis l'extérieur de la pièce, les murs côté caméra s'effacent et
   l'intérieur reste visible (enceintes, objets, carte SPL).
 - **Salles et objets dessinés** : esquisse avec cotes, puis extrusion (voir plus bas).
@@ -38,7 +42,9 @@ python run.py scene.json   # ouvrir une scène enregistrée
 - **Objets composés** (bureau, régie…) : ensembles de formes, **accrochage coin sur coin** et le long
   d'une arête, **décalage** d'une sélection multiple, **sauvegarde des ensembles** pour les réutiliser.
 - **Rayons et réflexions** : lancer de rayons coloré par ordre de réflexion, et chemins exacts vers
-  un point d'écoute (méthode des sources images) avec retard et niveau.
+  un point d'écoute (méthode des sources images) avec retard et niveau. Option « Seulement ceux qui
+  atteignent l'écouteur » : ne garde que les rayons qui passent dans la sphère de tête (ou à moins du
+  rayon de capture), coupés à l'écouteur ; augmentez alors le nombre de rayons.
 - **Carte SPL** sur les zones public et en coupe verticale, avec ou sans délais, à une fréquence,
   par bande ou en énergie ; pour toutes les sources ou seulement le HP / groupe sélectionné.
 - **Délais** : la température donne la vitesse du son ; on choisit le ou les groupes main, les autres
@@ -235,6 +241,11 @@ par exemple) ne comptent pas.
 - Les zones s'affichent **en gras** (jaune) dans les vues, avec leurs dimensions ; le tableau donne
   dimensions et position (mur : depuis le coin gauche vu de l'intérieur et depuis le sol ; sol /
   plafond : en X / Y).
+- **Masquer les zones minimales** (case dans les onglets SBIR et TRAITEMENT), par exemple une fois
+  les panneaux posés.
+- Le **sol** n'est pas traité par défaut : sélectionnez sa zone et cochez « Traiter cette zone ».
+- **Plafond suspendu** : « Suspension sous plafond » donne la distance entre le plafond et le dessus
+  des panneaux du plafond (réglage par défaut dans « Pose », puis par zone).
 - Pour chaque zone : traiter ou non, **taille de panneau** (120 × 60, 60 × 60, 120 × 30, 100 × 50,
   60 × 30 cm, sur mesure, ou un seul panneau de la taille de la zone, par défaut pour le sol),
   orientation (auto / portrait / paysage), épaisseur.
@@ -244,7 +255,14 @@ par exemple) ne comptent pas.
   réflexions). « Retirer les panneaux » les supprime ; poser à nouveau les remplace.
 - Noms des parois : mur avant (derrière les enceintes), arrière, gauche et droit vus depuis l'écoute.
 
-Les angles et le traitement du grave (bass traps) ne sont pas calculés.
+**Bass traps** : choisissez un angle de la pièce (avant / arrière, gauche / droit vu depuis
+l'écoute), une forme (triangle, arrondi ou carré d'angle), le côté le long des murs et la hauteur
+(0 = du sol au plafond), puis « Ajouter le bass trap ». C'est une forme ordinaire : « Éditer
+l'esquisse » permet de la redessiner à la main. Toute forme peut aussi devenir un bass trap avec la
+case « Bass trap » de ses propriétés. Les bass traps sont rangés dans « Traitement acoustique ›
+Bass traps », restent en place quand on pose ou retire les panneaux, absorbent dans les calculs et
+apparaissent dans le PDF (plan hachuré, tableau). Leur emplacement n'est pas calculé : c'est à vous
+de les concevoir.
 
 ## Exports PDF
 
@@ -255,9 +273,13 @@ vue qui sera mise dans le rapport. Le PDF (A4 paysage) contient :
 
 1. synthèse : vue 3D, pièce, écoute, enceintes, zones minimales ;
 2. courbe SBIR et tableau des réflexions ;
-3. plan coté de la pièce : murs, bureau, enceintes, écouteur, zones et panneaux, positions ;
-4. une élévation par paroi traitée (1:20 à 1:50) : zone minimale en gras et cotée, panneaux cotés ;
-5. liste des panneaux (repère, dimensions, position du coin bas gauche).
+3. plan coté de la pièce : murs, bureau, enceintes, écouteur, zones, panneaux et bass traps ;
+4. une élévation par paroi traitée (1:20 à 1:50) : zone minimale en gras et cotée, panneaux cotés,
+   suspension pour le plafond ;
+5. liste des panneaux (repère, dimensions, position du coin bas gauche, suspension) et des bass traps.
+
+Quand les panneaux d'une paroi sont posés (ou que les zones sont masquées), sa zone minimale
+n'apparaît plus dans le PDF : seuls les panneaux sont dessinés et cotés.
 
 **Plans de découpe d'un ensemble** (ex. le bureau) : choix de l'ensemble et des unités, puis
 
