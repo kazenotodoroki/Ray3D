@@ -24,6 +24,7 @@ CATS = {
     "ceiling": "Plafond",
     "rear": "Mur derrière l'écoute",
 }
+SHORT = {"front": "Mur avant", "side": "Latéral", "floor": "Sol", "ceiling": "Plafond", "rear": "Mur arrière"}
 CAT_COLORS = {"direct": "#ffffff", "front": "#ff7a1a", "side": "#3ec1ff", "floor": "#b6ff3a",
               "ceiling": "#9b7bff", "rear": "#ff3aa8", "multi": "#ffd23a"}
 SMOOTH = {"Aucun": 0.0, "1/48 oct": 1 / 48, "1/24 oct": 1 / 24, "1/12 oct": 1 / 12,
@@ -100,7 +101,7 @@ def paths_for(geo, sources, L, order, c):
             S = p["src"].pos
             cats = [classify(geo, q, np.asarray(R), S, L) for q, R in zip(p["faces"], p["pts"][1:-1])]
             p["cats"] = cats
-            p["cat"] = cats[0] if len(cats) == 1 else "multi"
+            p["cat"] = cats[0]                  # couleur : première paroi touchée
             p["color"] = CAT_COLORS[p["cat"]]
     return paths
 
@@ -152,8 +153,9 @@ def reflection_table(used, c):
             fr = p["freqs"]
             k = int(np.argmin(np.abs(np.log(fr / min(max(notch, fr[0]), fr[-1])))))
             rel = 20 * math.log10(max(p["amp_f"][k], 1e-12) / max(d["amp_f"][k], 1e-12))
+        chain = " → ".join(SHORT.get(k, k) for k in p.get("cats", [p["cat"]]))
         rows.append(dict(src=p["src"], cat=p["cat"], surf=p["surf"], order=p["order"], delta=delta,
-                         dt=delta / c * 1000, notch=notch, rel=rel))
+                         dt=delta / c * 1000, notch=notch, rel=rel, chain=chain))
     rows.sort(key=lambda r: r["delta"])
     return rows
 

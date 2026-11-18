@@ -17,6 +17,8 @@ from . import acoustics as A
 from .demo import default_scene, studio_scene
 from . import sbir as SB
 from .sbirtab import SbirTab
+from .treattab import TreatTab
+from . import treatment as T
 from .library import default_models
 from .libdialog import LibraryDialog
 from .model import (Scene, Shape, Group, Speaker, LineArray, Row, Listener, new_id, speed_of_sound,
@@ -176,9 +178,16 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self.tab_sbir, "SBIR")
         self.tab_sbir.changed.connect(self.on_tab_changed)
         self.tab_sbir.applied.connect(self.after_edit)
+        self.tab_sbir.export_pdf.connect(self.export_analysis_pdf)
+        self.tab_treat = TreatTab(get)
+        tabs.addTab(self.tab_treat, "TRAITEMENT")
+        self.tab_treat.place.connect(self.place_treatment)
+        self.tab_treat.remove.connect(self.remove_treatment)
+        self.tab_treat.export_pdf.connect(self.export_analysis_pdf)
+        self.tab_treat.export_desk.connect(self.export_cutlist_pdf)
         tabs.currentChanged.connect(lambda _: self.schedule())
         self.tabs = tabs
-        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir):
+        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
             t.changed.connect(self.on_tab_changed)
         self.tab_arr.applied.connect(self.after_edit)
         self.dock_r = QtWidgets.QDockWidget("", self)
@@ -341,13 +350,21 @@ class MainWindow(QtWidgets.QMainWindow):
         lk = lambda o: "🔒 " if getattr(o, "locked", False) else ""
         r = node(self.tree, "FORMES", flags_on=(drop,))
         r.setFlags(r.flags() | drop)
-        for a in sc.assemblies:
-            members = sc.shapes_in(a.id)
-            ai = node(r, a.name, f"{lk(a)}ensemble · {len(members)}", "assembly", a.id, "#e8e8e8",
-                      flags_on=(drop, drag))
-            for sh in members:
+        def add_assembly(parent_item, a, depth=0):
+            n = len(sc.all_shapes_in(a.id))
+            nsub = len(sc.sub_assemblies(a.id))
+            sub = f"{lk(a)}{'sous-ensemble' if depth else 'ensemble'} · {n}" + (f" · {nsub} sous-ens." if nsub else "")
+            ai = node(parent_item, a.name, sub, "assembly", a.id, "#e8e8e8", flags_on=(drop, drag))
+            if depth > 30:
+                return
+            for b in sc.sub_assemblies(a.id):
+                add_assembly(ai, b, depth + 1)
+            for sh in sc.shapes_in(a.id):
                 node(ai, sh.name, lk(sh) + sh.kind.lower(), "shape", sh.id, flags_on=(drag,))
             ai.setExpanded(True)
+        for a in sc.assemblies:
+            if not a.parent:
+                add_assembly(r, a)
         for sh in sc.shapes:
             if not sh.assembly:
                 node(r, sh.name, lk(sh) + sh.kind.lower(), "shape", sh.id, flags_on=(drag,))
@@ -439,6 +456,8 @@ class MainWindow(QtWidgets.QMainWindow):
             m.addAction("Créer un ensemble avec la sélection", self.group_shapes)
         if kind == "assembly":
             m.addAction("Dissocier l'ensemble", self.ungroup_shapes)
+            if obj.parent:
+                m.addAction("Sortir du sous-groupe (remonter d'un niveau)", self.remove_from_assembly)
         m.addSeparator()
         m.addAction("Décaler…", self.offset_selection)
         m.addAction("Accrocher…", self.snap_selection)
@@ -546,7 +565,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ids = set(self.multi) | ({self.sel} if self.sel else set())
         for kind, obj in self.selected_items():
             if kind == "assembly":
-                ids |= {s.id for s in self.scene.shapes_in(obj.id)}
+                ids |= {s.id for s in self.scene.all_shapes_in(obj.id)}
         return ids
 
     def sbir_context(self):
@@ -582,6 +601,56 @@ class MainWindow(QtWidgets.QMainWindow):
                                        nsrc=len(ctx["sources"]))
             self._cache["sbir_key"] = key
         return self._cache["sbir"]
+
+    def treat_opts(self):
+        st = self.scene.settings
+        return dict(head_w=st.treat_head_w, head_d=st.treat_head_d, head_h=st.treat_head_h,
+                    margin=st.treat_margin, min_level=st.treat_min_level)
+
+    def compute_treatment(self):
+        """Zones minimales de traitement (écouteur et sources de l'onglet SBIR)."""
+        ctx = self.sbir_context()
+        if ctx is None:
+            return [], None
+        if self.scene.settings.treat_scope != "Sélection":
+            ctx = dict(ctx, sources=[s for s in self.scene.active_sources()])
+        else:
+            sel = self.selected_sources()
+            ctx = dict(ctx, sources=self.scene.active_sources() if sel is None else [s for s in sel if not s.mute])
+        if not ctx["sources"]:
+            return [], None
+        key = self._key(("treat", self.sel, sorted(s.id for s in ctx["sources"]), ctx["listener_obj"].id,
+                         self.treat_opts()))
+        if self._cache.get("treat_key") != key:
+            self._cache["treat"] = T.compute_zones(self.scene, ctx["sources"], ctx["listener"], self.treat_opts())
+            self._cache["treat_key"] = key
+        return self._cache["treat"], ctx
+
+    def place_treatment(self):
+        zones, _ = self.compute_treatment()
+        if not zones:
+            QtWidgets.QMessageBox.information(self, "Traitement", "Aucune zone à traiter.")
+            return
+        created = T.place_panels(self.scene, zones, self.scene.settings.treat_gap)
+        self.status.setText(f"{len(created)} panneau(x) posé(s)")
+        self.schedule(True)
+
+    def remove_treatment(self):
+        n = T.remove_treatment(self.scene)
+        if self.sel and self.scene.find(self.sel)[1] is None:
+            self.sel = None
+            self.props.set_object(None, None)
+        self.multi = {i for i in self.multi if self.scene.find(i)[1] is not None}
+        self.status.setText(f"{n} panneau(x) retiré(s)")
+        self.schedule(True)
+
+    def export_analysis_pdf(self):
+        from .report import export_analysis
+        export_analysis(self)
+
+    def export_cutlist_pdf(self):
+        from .report import export_cutlist
+        export_cutlist(self)
 
     def _key(self, extra=None):
         d = self.scene.to_dict()
@@ -652,6 +721,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tab_sbir.show_result(sbir_res)
             if sbir_res is not None and st.sbir_show_paths:
                 shown = [p for p in sbir_res["used"] if p["order"] > 0]
+        zones, zone_plan = [], {}
+        treat_tab = self.tabs.currentWidget() is self.tab_treat
+        if (treat_tab or st.treat_show) and not self._previewing:
+            zones, tctx = self.compute_treatment()
+            placed = T.panel_rects(sc, zones)
+            for z in zones:
+                cfg = T.zone_cfg(z, st)
+                if cfg["on"] and not placed.get(z.key):
+                    zone_plan[z.key] = T.layout(z, cfg, st.treat_gap)["rects"]
+            if treat_tab:
+                self.tab_treat.show_result(zones, placed)
+                if tctx is not None:
+                    names = sorted({s.name.split(" · ")[0] for s in tctx["sources"]})
+                    self.tab_treat.set_context(f"Écoute « {tctx['listener_obj'].name} » · "
+                                               f"{', '.join(names[:6])}")
+                else:
+                    self.tab_treat.set_context("Ajoutez un écouteur et des enceintes.")
         corners = None
         k0, o0 = sc.find(self.sel) if self.sel else (None, None)
         if k0 in ("shape", "assembly", "object") and o0 is not None:
@@ -660,7 +746,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 corners = P
         res = dict(rays=rays, cones=cones, refl=shown, maps=maps, section=section,
                    range=(vmin, vmax), src_by_id={s.id: s for s in sc.sources},
-                   corners=corners, markers=self.markers)
+                   corners=corners, markers=self.markers, zones=zones, zone_plan=zone_plan)
+        self._last_res = res
         selset = self.selection_ids()
         self.v3d.render(sc, res, selset)
         self.vtop.render(sc, res, selset)
@@ -890,26 +977,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recompute()
 
     def group_shapes(self):
+        """Crée un ensemble avec les formes et ensembles sélectionnés. Un ensemble sélectionné devient un
+        sous-ensemble du nouvel ensemble (sous-groupe)."""
         sc = self.scene
-        shapes, olds = [], []
-        for kind, obj in self.selected_items():
-            if kind == "shape":
-                shapes.append(obj)
-            elif kind == "assembly":
-                shapes += sc.shapes_in(obj.id)
-                olds.append(obj)
-        shapes = list({s.id: s for s in shapes if s.kind != "Pièce"}.values())
-        if len(shapes) < 1:
-            QtWidgets.QMessageBox.information(self, "Ensemble", "Sélectionnez des formes (objets ou surfaces) avec "
-                                                                "Ctrl+clic dans l'arbre.")
+        items = self.selected_items()
+        subs = [o for k, o in items if k == "assembly"]
+        sub_ids = set()
+        for a in subs:
+            sub_ids |= {b.id for b in sc.descendant_assemblies(a.id)}
+        subs = [a for a in subs if a.id not in sub_ids]          # garde les plus hauts sélectionnés
+        inside = {a.id for a in subs} | sub_ids
+        shapes = [o for k, o in items if k == "shape" and o.kind != "Pièce" and o.assembly not in inside]
+        shapes = list({s.id: s for s in shapes}.values())
+        if not shapes and not subs:
+            QtWidgets.QMessageBox.information(self, "Ensemble", "Sélectionnez des formes (objets ou surfaces) ou des "
+                                                                "ensembles avec Ctrl+clic dans l'arbre.")
             return
         name, ok = QtWidgets.QInputDialog.getText(self, "Ensemble", "Nom de l'ensemble :",
-                                                  text=olds[0].name if olds else f"Ensemble {len(sc.assemblies) + 1}")
+                                                  text=f"Ensemble {len(sc.assemblies) + 1}")
         if not ok:
             return
-        for a in olds:
-            sc.assemblies.remove(a)
-        a = E.make_assembly(sc, shapes, name.strip() or None)
+        a = E.make_assembly(sc, shapes, name.strip() or None, subs)
+        sc.prune_assemblies()
         self.schedule(True)
         self.select(a.id)
 
@@ -928,9 +1017,11 @@ class MainWindow(QtWidgets.QMainWindow):
         for kind, obj in self.selected_items():
             if kind == "shape" and obj.assembly:
                 a = sc.assembly(obj.assembly)
-                obj.assembly = ""
-                if a is not None and not sc.shapes_in(a.id):
-                    sc.assemblies.remove(a)
+                obj.assembly = a.parent if a is not None else ""     # remonte d'un niveau
+            elif kind == "assembly" and obj.parent:
+                p = sc.assembly(obj.parent)
+                obj.parent = p.parent if p is not None else ""
+        sc.prune_assemblies()
         self.schedule(True)
 
     def on_drop(self, dragged, tkind, tid):
@@ -944,9 +1035,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 o.assembly = tid; changed = True
             elif k == "shape" and tkind == "shapes_root":
                 o.assembly = ""; changed = True
-        for a in list(sc.assemblies):
-            if not sc.shapes_in(a.id):
-                sc.assemblies.remove(a)
+            elif k == "assembly" and tkind == "assembly" and E.can_nest(sc, o.id, tid):
+                o.parent = tid; changed = True            # sous-ensemble
+            elif k == "assembly" and tkind == "shapes_root":
+                o.parent = ""; changed = True
+        sc.prune_assemblies()
         if changed:
             self.schedule(True)
 
@@ -1012,7 +1105,7 @@ class MainWindow(QtWidgets.QMainWindow):
             sc = Scene.from_dict(json.loads(snap))
             self.scene = sc
             self._cache.clear()
-            for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir):
+            for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
                 t.load()
             self.sel = sel if sc.find(sel)[1] is not None else None
             self.multi = {i for i in self.multi if sc.find(i)[1] is not None}
@@ -1096,9 +1189,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not items:
             return
         groups = [o for k, o in items if k == "group" and sc.objects_in(o.id)]
-        asms = [o for k, o in items if k == "assembly" and sc.shapes_in(o.id)]
+        asms = [o for k, o in items if k == "assembly" and sc.all_shapes_in(o.id)]
         if groups or asms:
-            n = sum(len(sc.objects_in(g.id)) for g in groups) + sum(len(sc.shapes_in(a.id)) for a in asms)
+            n = sum(len(sc.objects_in(g.id)) for g in groups) + sum(len(sc.all_shapes_in(a.id)) for a in asms)
             r = QtWidgets.QMessageBox.question(self, "Supprimer", f"Supprimer aussi les {n} élément(s) contenus "
                                                                    f"dans les groupes / ensembles sélectionnés ?")
             if r != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -1107,8 +1200,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if kind == "shape" and obj in sc.shapes:
                 sc.shapes.remove(obj)
             elif kind == "assembly" and obj in sc.assemblies:
-                sc.shapes = [s for s in sc.shapes if s.assembly != obj.id]
-                sc.assemblies.remove(obj)
+                ids = {obj.id} | {b.id for b in sc.descendant_assemblies(obj.id)}
+                sc.shapes = [s for s in sc.shapes if s.assembly not in ids]
+                sc.assemblies = [a for a in sc.assemblies if a.id not in ids]
             elif kind == "object" and obj in sc.objects:
                 sc.unlink(obj)
                 sc.objects.remove(obj)
@@ -1119,9 +1213,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 sc.groups.remove(obj)
             elif kind == "listener" and obj in sc.listeners:
                 sc.listeners.remove(obj)
-        for a in list(sc.assemblies):
-            if not sc.shapes_in(a.id):
-                sc.assemblies.remove(a)
+        sc.prune_assemblies()
         self.sel = None
         self.multi = set()
         self.props.set_object(None, None)
@@ -1142,7 +1234,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.multi = set()
         self._cache.clear()
         self.props.set_object(None, None)
-        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir):
+        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
             t.load()
         self.refresh_tree()
         self.refresh_lists()

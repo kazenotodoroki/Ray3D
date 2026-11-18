@@ -335,6 +335,7 @@ class Assembly:
     """Ensemble de formes (objet composé : bureau, régie, praticable…)."""
     name: str = "Ensemble"
     locked: bool = False
+    parent: str = ""               # ensemble parent (sous-groupe)
     id: str = field(default_factory=new_id)
 
 
@@ -436,6 +437,22 @@ class Settings:
     sbir_scan_max: float = 1.5
     row_dist: float = 3.0
     row_overlap: str = "-6 dB"
+    # traitement acoustique (premières réflexions, hors bass traps)
+    treat_show: bool = False
+    treat_scope: str = "Sélection"
+    treat_head_w: float = 0.6
+    treat_head_d: float = 0.3
+    treat_head_h: float = 0.2
+    treat_margin: float = 0.10
+    treat_min_level: float = -30.0
+    treat_size: str = "120 × 60 cm"
+    treat_thick: float = 0.10
+    treat_alpha: float = 0.9
+    treat_gap: float = 0.0
+    treat_panels: dict = field(default_factory=dict)
+    treat_assembly: str = ""
+    # export PDF
+    pdf_units: str = "mm"
 
 
 # --------------------------------------------------------------------------- poses
@@ -522,7 +539,46 @@ class Scene:
         return next((a for a in self.assemblies if a.id == aid), None)
 
     def shapes_in(self, aid):
+        """Formes directement dans l'ensemble aid."""
         return [s for s in self.shapes if s.assembly == aid]
+
+    def sub_assemblies(self, aid):
+        return [a for a in self.assemblies if a.parent == aid]
+
+    def descendant_assemblies(self, aid):
+        out, todo = [], [aid]
+        while todo:
+            cur = todo.pop()
+            for a in self.sub_assemblies(cur):
+                if a not in out:
+                    out.append(a)
+                    todo.append(a.id)
+        return out
+
+    def all_shapes_in(self, aid):
+        """Formes de l'ensemble et de tous ses sous-ensembles."""
+        ids = {aid} | {a.id for a in self.descendant_assemblies(aid)}
+        return [s for s in self.shapes if s.assembly in ids]
+
+    def ancestors(self, aid):
+        out, seen = [], set()
+        a = self.assembly(aid)
+        while a is not None and a.parent and a.parent not in seen:
+            seen.add(a.parent)
+            a = self.assembly(a.parent)
+            if a is not None:
+                out.append(a)
+        return out
+
+    def prune_assemblies(self):
+        """Supprime les ensembles vides (sans forme ni sous-ensemble)."""
+        changed = True
+        while changed:
+            changed = False
+            for a in list(self.assemblies):
+                if not self.shapes_in(a.id) and not self.sub_assemblies(a.id):
+                    self.assemblies.remove(a)
+                    changed = True
 
     def sources_of(self, oid):
         return [s for s in self.sources if s.owner == oid]
@@ -672,6 +728,9 @@ class Scene:
         sc.listeners = [cls._make(Listener, x) for x in d.get("listeners", [])]
         sc.assemblies = [cls._make(Assembly, x) for x in d.get("assemblies", [])]
         ids = {a.id for a in sc.assemblies}
+        for a in sc.assemblies:
+            if a.parent not in ids or a.parent == a.id:
+                a.parent = ""
         for s in sc.shapes:
             if s.assembly and s.assembly not in ids:
                 s.assembly = ""

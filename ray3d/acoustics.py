@@ -298,8 +298,10 @@ def _line_plane(A, B, O, N):
 
 @np.errstate(invalid="ignore", divide="ignore")
 def reflection_paths(geo: Geometry, sources, L, max_order, c):
+    """Son direct + chemins réfléchis (ordre 1..max_order, jusqu'à 4) pour chaque source."""
+    from .paths import specular_paths
     out = []
-    F = geo.F
+    L = np.asarray(L, float)
     for s in sources:
         S = s.pos
         dv = L - S
@@ -308,45 +310,17 @@ def reflection_paths(geo: Geometry, sources, L, max_order, c):
         out.append(dict(src=s, order=0, pts=[S, L], length=dlen, dt=0.0, rel=0.0,
                         level=s.level + 20 * math.log10(damp), blocked=geo.blocked(S, L), surf=[],
                         faces=[], d0=dv / dlen))
-        if F == 0 or max_order < 1:
+        if geo.F == 0 or max_order < 1:
             continue
-        cand = []
-        S1 = _mirror(S[None], geo.fO, geo.fN)                       # (F,3)
-        t = _line_plane(S1, L[None], geo.fO, geo.fN)
-        R = S1 + t[:, None] * (L - S1)
-        for i in range(F):
-            if not (EPS < t[i] < 1 - EPS) or not geo.in_face(R[i], i):
-                continue
-            if not (geo.blocked(S, R[i], [i]) or geo.blocked(R[i], L, [i])):
-                cand.append(([S, R[i], L], [i]))
-        if max_order >= 2:
-            S2 = _mirror(S1[:, None, :], geo.fO[None], geo.fN[None])       # (F,F,3)
-            t2 = _line_plane(S2, L[None, None], geo.fO[None], geo.fN[None])
-            R2 = S2 + t2[..., None] * (L - S2)
-            t1 = _line_plane(S1[:, None, :], R2, geo.fO[:, None, :], geo.fN[:, None, :])
-            R1 = S1[:, None, :] + t1[..., None] * (R2 - S1[:, None, :])
-            ok = (t2 > EPS) & (t2 < 1 - EPS) & (t1 > EPS) & (t1 < 1 - EPS) & ~np.eye(F, dtype=bool)
-            for j in range(F):
-                col = ok[:, j]
-                if col.any():
-                    col &= geo.in_face(R2[:, j], j)
-                    ok[:, j] = col
-            for i in range(F):
-                row = ok[i]
-                if row.any():
-                    ok[i] = row & geo.in_face(R1[i], i)
-            for i, j in np.argwhere(ok):
-                a, b = R1[i, j], R2[i, j]
-                if not (geo.blocked(S, a, [i]) or geo.blocked(a, b, [i, j]) or geo.blocked(b, L, [j])):
-                    cand.append(([S, a, b, L], [i, j]))
-        for pts, surf in cand:
-            seg = np.diff(np.array(pts), axis=0)
-            length = float(np.linalg.norm(seg, axis=1).sum())
-            d0 = seg[0] / np.linalg.norm(seg[0])
+        for surf, P in specular_paths(geo, S, L, min(int(max_order), 4)):
+            seg = np.diff(P, axis=0)
+            lens = np.linalg.norm(seg, axis=1)
+            length = float(lens.sum())
+            d0 = seg[0] / max(lens[0], 1e-12)
             amp = float(gain(s, d0[None])[0]) / length
             for q in surf:
-                amp *= math.sqrt(1 - geo.fA[q])
-            out.append(dict(src=s, order=len(surf), pts=pts, length=length,
+                amp *= math.sqrt(max(1 - geo.fA[q], 0.0))
+            out.append(dict(src=s, order=len(surf), pts=list(P), length=length,
                             dt=(length - dlen) / c * 1000, rel=20 * math.log10(max(amp, 1e-12) / damp),
                             level=s.level + 20 * math.log10(max(amp, 1e-12)), blocked=False,
                             surf=[geo.fname[q] for q in surf], faces=list(surf), d0=d0))

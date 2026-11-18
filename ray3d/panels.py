@@ -288,16 +288,18 @@ class PropertyEditor(QtWidgets.QWidget):
             self.info_lab = b.info()
             self._corners(form)
         elif k == "assembly":
-            members = sc.shapes_in(o.id)
-            b.section("Ensemble")
+            b.section("Sous-ensemble" if o.parent else "Ensemble")
+            if o.parent and sc.assembly(o.parent):
+                b.info("Dans : " + " › ".join(a.name for a in reversed([sc.assembly(o.parent)] + sc.ancestors(o.parent))))
             b.add("name", "Nom", "str")
             b.add("locked", "🔒 Position verrouillée", "bool")
             self._place_buttons(form, o.locked)
             self._button(form, "Enregistrer l'ensemble…", lambda: self.action.emit("save_ensemble"))
             self._button(form, "Dissocier", lambda: self.action.emit("ungroup"))
             self.info_lab = b.info()
-            b.info("Glissez une forme sur l'ensemble dans l'arbre pour l'y ajouter, ou sur « FORMES » pour l'en "
-                   "retirer. Les formes gardent leurs propres réglages.")
+            b.info("Glissez une forme ou un ensemble sur cet ensemble dans l'arbre pour l'y ranger (sous-groupe), "
+                   "ou sur « FORMES » pour l'en sortir. Ctrl+G sur des ensembles sélectionnés les regroupe dans "
+                   "un nouvel ensemble.")
             self._corners(form)
         elif k == "object":
             lab = {"speaker": "Haut-parleur", "array": "Line array", "row": "Rangée"}[o.TYPE]
@@ -429,12 +431,15 @@ class PropertyEditor(QtWidgets.QWidget):
                                       f"Encombrement {ext[0]:.2f} × {ext[1]:.2f} × {ext[2]:.2f} m\n"
                                       f"z de {lo[2]:.2f} à {hi[2]:.2f} m")
             elif self.kind == "assembly":
-                shapes = scene.shapes_in(o.id)
+                shapes = scene.all_shapes_in(o.id)
+                subs = scene.sub_assemblies(o.id)
                 if shapes:
                     P = np.vstack([s.corners() for s in shapes])
                     lo, hi = P.min(0), P.max(0)
                     ext = hi - lo
-                    self.info_lab.setText(f"{len(shapes)} forme(s) : " + ", ".join(s.name for s in shapes[:6]) +
+                    self.info_lab.setText(f"{len(shapes)} forme(s)" +
+                                          (f", {len(subs)} sous-ensemble(s) : " + ", ".join(a.name for a in subs[:4])
+                                           if subs else " : " + ", ".join(s.name for s in shapes[:6])) +
                                           f"\nEncombrement {ext[0]:.2f} × {ext[1]:.2f} × {ext[2]:.2f} m\n"
                                           f"Coin bas : ({lo[0]:.3f}, {lo[1]:.3f}, {lo[2]:.3f})")
             elif self.kind == "object":
@@ -800,7 +805,7 @@ class ReflTab(QtWidgets.QWidget):
         self.lst = NoWheelCombo()
         self.lst.currentIndexChanged.connect(self._lst_changed)
         form.addRow("Écouteur", self.lst)
-        b.add("refl_order", "Ordre max", "int", lo=1, hi=2)
+        b.add("refl_order", "Ordre max", "int", lo=1, hi=4)
         self.summary = QtWidgets.QLabel(); self.summary.setObjectName("info"); self.summary.setWordWrap(True)
         form.addRow(self.summary)
         self.table = make_table(["Source", "Ord.", "Surfaces", "Δt", "Niveau", "rel."], stretch=2)

@@ -38,7 +38,7 @@ def item_faces(scene: Scene, kind, obj):
     if kind == "shape":
         return obj.faces()
     if kind == "assembly":
-        return [f for s in scene.shapes_in(obj.id) for f in s.faces()]
+        return [f for s in scene.all_shapes_in(obj.id) for f in s.faces()]
     if kind == "object":
         return [f for box in scene.bodies.get(obj.id, []) for f in box]
     if kind == "group":
@@ -80,9 +80,10 @@ def is_locked(scene: Scene, kind, obj):
         return True
     if getattr(obj, "locked", False):
         return True
-    if kind == "shape" and obj.assembly:
-        a = scene.assembly(obj.assembly)
-        return bool(a and a.locked)
+    aid = obj.assembly if kind == "shape" else (obj.id if kind == "assembly" else "")
+    if aid:
+        chain = ([scene.assembly(aid)] if kind == "shape" else []) + scene.ancestors(aid)
+        return any(a is not None and a.locked for a in chain)
     return False
 
 
@@ -98,7 +99,7 @@ def expand(scene: Scene, items):
         out.append((k, o))
     for kind, obj in items:
         if kind == "assembly":
-            for s in scene.shapes_in(obj.id):
+            for s in scene.all_shapes_in(obj.id):
                 add("shape", s)
         elif kind == "group":
             for o in scene.objects_in(obj.id):
@@ -144,18 +145,40 @@ def snap_vector(P_src, k_src, P_dst, k_dst, edge_to=None, along=0.0, extra=(0, 0
 
 
 # --------------------------------------------------------------------------- ensembles (objets composés)
-def make_assembly(scene: Scene, shapes, name=None):
-    a = Assembly(name or f"Ensemble {len(scene.assemblies) + 1}")
+def make_assembly(scene: Scene, shapes, name=None, subs=()):
+    """Nouvel ensemble contenant des formes et des sous-ensembles. Il prend la place des éléments
+    dans leur ensemble parent commun (s'il y en a un)."""
+    parents = {s.assembly for s in shapes} | {a.parent for a in subs}
+    sub_ids = {a.id for a in subs}
+    parent = parents.pop() if len(parents) == 1 else ""
+    if parent in sub_ids:
+        parent = ""
+    a = Assembly(name or f"Ensemble {len(scene.assemblies) + 1}", parent=parent)
     scene.assemblies.append(a)
     for s in shapes:
         s.assembly = a.id
+    for b in subs:
+        if b.id != a.id:
+            b.parent = a.id
     return a
 
 
 def dissolve(scene: Scene, a):
+    """Supprime l'ensemble ; son contenu remonte dans l'ensemble parent."""
     for s in scene.shapes_in(a.id):
-        s.assembly = ""
+        s.assembly = a.parent
+    for b in scene.sub_assemblies(a.id):
+        b.parent = a.parent
     scene.assemblies.remove(a)
+
+
+def can_nest(scene: Scene, child_id, parent_id):
+    """Vrai si l'ensemble child peut être placé dans parent (pas de boucle)."""
+    if not parent_id:
+        return True
+    if child_id == parent_id:
+        return False
+    return parent_id not in {b.id for b in scene.descendant_assemblies(child_id)}
 
 
 def ensemble_dict(scene: Scene, items, name):
@@ -165,7 +188,9 @@ def ensemble_dict(scene: Scene, items, name):
     for kind, obj in items:
         if kind == "assembly":
             asm[obj.id] = obj
-            shapes += scene.shapes_in(obj.id)
+            for b in scene.descendant_assemblies(obj.id):
+                asm[b.id] = b
+            shapes += scene.all_shapes_in(obj.id)
         elif kind == "shape":
             shapes.append(obj)
             if obj.assembly:
@@ -228,7 +253,11 @@ def insert_ensemble(scene: Scene, d, offset=(0.0, 0.0, 0.0)):
             a.name = d["name"]
         amap[ad["id"]] = a.id
         scene.assemblies.append(a)
-        created.append(("assembly", a))
+        if not ad.get("parent") or ad.get("parent") not in {x["id"] for x in d.get("assemblies", [])}:
+            created.append(("assembly", a))          # ensembles de premier niveau seulement
+    for ad in d.get("assemblies", []):              # sous-ensembles : parents renumérotés
+        a = scene.assembly(amap[ad["id"]])
+        a.parent = amap.get(ad.get("parent", ""), "")
     loose = [sd for sd in d.get("shapes", []) if not sd.get("assembly") or sd["assembly"] not in amap]
     if len(loose) > 1 and not amap:          # plusieurs formes libres : on les regroupe
         a = Assembly(d.get("name") or "Ensemble")

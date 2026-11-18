@@ -44,7 +44,12 @@ python run.py scene.json   # ouvrir une scène enregistrée
 - **Délais** : la température donne la vitesse du son ; on choisit le ou les groupes main, les autres
   reçoivent leur délai.
 - **SBIR (conception de studio)** : réponse en fréquence au point d'écoute avec les réflexions des
-  parois proches, réflexions arrières en option, et recherche de la meilleure distance au mur.
+  parois proches (ordres 1 à 4), réflexions arrières en option, et recherche de la meilleure
+  distance au mur.
+- **Traitement acoustique** : zones minimales de premières réflexions sur les murs, le sol et le
+  plafond (hors bass traps), pose optimisée de panneaux de la taille choisie.
+- **Exports PDF** : analyse acoustique (vue 3D cadrée, SBIR, plan coté, élévations, liste des
+  panneaux) et plans de découpe d'un ensemble (bureau…), cotes en mm, cm ou m.
 - **Annuler / Rétablir** (Ctrl+Z / Ctrl+Y) et **sauvegarde automatique**.
 
 ## Repère et unités
@@ -105,7 +110,11 @@ long de l'arête.
 - *Créer un ensemble avec la sélection* (Ctrl+G) : regroupe des formes en un objet composé, qui se
   sélectionne, se déplace, s'accroche et se verrouille d'un bloc. Glisser une forme sur un ensemble
   dans l'arbre l'y ajoute ; la glisser sur « FORMES » l'en retire.
-- *Dissocier* (Ctrl+Maj+G).
+- **Sous-ensembles** : un ensemble peut contenir d'autres ensembles (par exemple « Bureau » qui
+  contient « Supports »). Ctrl+G sur des ensembles sélectionnés les range dans un nouvel ensemble ;
+  glisser un ensemble sur un autre dans l'arbre l'y range, le glisser sur « FORMES » le remet au
+  premier niveau. Déplacer ou verrouiller un ensemble agit sur tout son contenu.
+- *Dissocier* (Ctrl+Maj+G) : le contenu remonte d'un niveau.
 - *Enregistrer la sélection comme ensemble…* : fichier `.r3dset` (par défaut dans
   `~/.ray3d/ensembles/`), qui peut contenir des formes, des ensembles, des HP (avec leurs modèles) et
   des écouteurs.
@@ -176,13 +185,20 @@ de 1.4 m, point d'écoute à 1.2 m.
 
 L'onglet **SBIR** calcule la réponse en fréquence au point d'écoute : somme complexe (amplitude et
 phase) du son direct et des réflexions sur les parois, par la méthode des sources images
-(ordre 1 ou 2). Il affiche :
+(ordre 1 à 4). Il affiche :
 
 - la courbe totale et celle du son direct seul (lissage au choix, de 1/48 à 1/3 d'octave) ;
 - le premier creux de chaque paroi en trait pointillé, à la couleur de la paroi ;
 - un tableau des réflexions : paroi, différence de trajet, retard, premier creux c / (2·Δ),
   niveau relatif à la fréquence du creux ;
-- les chemins de réflexion dans les vues 2D et 3D, colorés par paroi.
+- les chemins de réflexion dans les vues 2D et 3D, colorés par paroi : la couleur d'une réflexion
+  d'ordre 2 à 4 est celle de la première paroi touchée, et le tableau donne la chaîne des parois
+  (« 2× · Mur avant → Plafond ») ; plus l'ordre est élevé, plus le trait est transparent.
+
+Ordres 3 et 4 : les chemins sont cherchés par lancer de rayons puis validés exactement par sources
+images (environ 1 à 2 s à l'ordre 4 pour un studio). Les balayages restent limités à l'ordre 2.
+
+**Exporter l'analyse en PDF** (bouton sous le tableau) : voir « Exports PDF ».
 
 Parois prises en compte, chacune activable : mur derrière l'enceinte, murs latéraux, sol, plafond.
 
@@ -205,8 +221,52 @@ déplace l'enceinte le long de son axe (son miroir lié suit) ou le point d'éco
 verrouillée n'est pas déplacée.
 
 Limites : parois planes et réflexions spéculaires, absorption indépendante de la fréquence, pas de
-modes de la pièce au-delà de ce que donnent les sources images d'ordre 2, pas de coupure dans le
+modes de la pièce au-delà de ce que donnent les sources images d'ordre 4, pas de coupure dans le
 grave des enceintes.
+
+## Traitement acoustique (hors bass traps)
+
+Onglet **TRAITEMENT**. Pour chaque paroi de la pièce (murs, sol, plafond), Ray 3D cherche les points
+de réflexion du premier ordre entre les enceintes et une **zone d'écoute** autour de la tête
+(largeur, profondeur, hauteur réglables, 0.60 × 0.30 × 0.20 m par défaut). Le rectangle qui les
+englobe, plus une marge, est la **zone minimale** à traiter. Les réflexions masquées (par le bureau
+par exemple) ne comptent pas.
+
+- Les zones s'affichent **en gras** (jaune) dans les vues, avec leurs dimensions ; le tableau donne
+  dimensions et position (mur : depuis le coin gauche vu de l'intérieur et depuis le sol ; sol /
+  plafond : en X / Y).
+- Pour chaque zone : traiter ou non, **taille de panneau** (120 × 60, 60 × 60, 120 × 30, 100 × 50,
+  60 × 30 cm, sur mesure, ou un seul panneau de la taille de la zone, par défaut pour le sol),
+  orientation (auto / portrait / paysage), épaisseur.
+- **Poser les panneaux** : grille centrée sur la zone, dans l'orientation qui couvre la zone avec le
+  moins de panneaux, sans sortir de la paroi. Les panneaux sont des objets rangés dans l'ensemble
+  « Traitement acoustique » (un sous-ensemble par paroi) et absorbent dans les calculs (SBIR,
+  réflexions). « Retirer les panneaux » les supprime ; poser à nouveau les remplace.
+- Noms des parois : mur avant (derrière les enceintes), arrière, gauche et droit vus depuis l'écoute.
+
+Les angles et le traitement du grave (bass traps) ne sont pas calculés.
+
+## Exports PDF
+
+Unités des plans au choix dans l'onglet TRAITEMENT : **mm** (par défaut), cm ou m.
+
+**Analyse acoustique** (onglets SBIR ou TRAITEMENT) : une fenêtre 3D s'ouvre d'abord pour cadrer la
+vue qui sera mise dans le rapport. Le PDF (A4 paysage) contient :
+
+1. synthèse : vue 3D, pièce, écoute, enceintes, zones minimales ;
+2. courbe SBIR et tableau des réflexions ;
+3. plan coté de la pièce : murs, bureau, enceintes, écouteur, zones et panneaux, positions ;
+4. une élévation par paroi traitée (1:20 à 1:50) : zone minimale en gras et cotée, panneaux cotés ;
+5. liste des panneaux (repère, dimensions, position du coin bas gauche).
+
+**Plans de découpe d'un ensemble** (ex. le bureau) : choix de l'ensemble et des unités, puis
+
+- vues de dessus, de face et de côté de l'ensemble à la même échelle, encombrement coté ;
+- nomenclature : pièces identiques regroupées (repère P1, P2…, quantité, profil, épaisseur) ;
+- position de chaque pièce dans l'ensemble ;
+- une page par pièce : profil à l'échelle avec la longueur de chaque segment, le rayon et la corde
+  des arcs, l'encombrement, les sommets numérotés (coordonnées et angles), et la vue de chant avec
+  l'épaisseur (longueur d'extrusion).
 
 ## Délais
 
@@ -237,6 +297,11 @@ ray3d/
   importers.py      import polaires / SOFA / modèles
   sbir.py           calcul SBIR, classement des parois, balayages
   sbirtab.py        onglet SBIR
+  paths.py          chemins spéculaires exacts jusqu'à l'ordre 4
+  treatment.py      zones de premières réflexions, pose des panneaux
+  treattab.py       onglet TRAITEMENT
+  pdfdoc.py         mise en page PDF, dessin à l'échelle, cotes
+  report.py         exports PDF (analyse acoustique, plans de découpe)
   edit.py           coins, déplacements, verrous, ensembles et leur sauvegarde
   tools.py          dialogues Décaler et Accrocher
   widgets.py        champs numériques

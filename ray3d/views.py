@@ -74,6 +74,20 @@ def oriented_mesh(faces):
     return np.vstack(V), np.array(F, int)
 
 
+ZONE_COLOR = "#ffe14d"
+
+
+def zone_corners(z, lift=0.006):
+    u0, v0, u1, v1 = z.rect
+    return z.to3([[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) + z.n_in * lift
+
+
+def panel_corners(z, r, closed=False, lift=0.01):
+    u, v, w, h = r[:4]
+    uv = [[u, v], [u + w, v], [u + w, v + h], [u, v + h]] + ([[u, v]] if closed else [])
+    return z.to3(uv) + z.n_in * lift
+
+
 def is_on(s, sel):
     return s.owner in sel or s.group in sel or s.id in sel
 
@@ -227,9 +241,28 @@ class View2D(pg.PlotWidget):
                 by_order.setdefault((p["order"], p.get("color")), []).append(p)
         for (order, pcol), paths in by_order.items():
             col = pcol or S.ORDER_COLORS[min(order, len(S.ORDER_COLORS) - 1)]
-            self._lines([self.P(np.array(p["pts"])) for p in paths], col, 160 if order == 1 else 100, 1.0, z=12)
+            self._lines([self.P(np.array(p["pts"])) for p in paths], col, {1: 170, 2: 110, 3: 70}.get(order, 45),
+                        1.0, z=12)
             pts = self.P(np.vstack([np.array(p["pts"][1:-1]) for p in paths]))
             self._add(pg.ScatterPlotItem(pts[:, 0], pts[:, 1], size=5, pen=None, brush=pg.mkBrush(qcolor(col, 220))), 13)
+
+        # --- zones de traitement (premières réflexions)
+        bold = QtGui.QFont(); bold.setBold(True); bold.setPointSize(8)
+        for z in res.get("zones", []):
+            C = zone_corners(z)
+            pc = self.P(np.vstack([C, C[:1]]))
+            self._add(pg.PlotDataItem(pc[:, 0], pc[:, 1], pen=pg.mkPen(qcolor(ZONE_COLOR, 240), width=3.2)), 30)
+            for r in res.get("zone_plan", {}).get(z.key, []):
+                q = self.P(panel_corners(z, r, closed=True))
+                self._add(pg.PlotDataItem(q[:, 0], q[:, 1], pen=pg.mkPen(qcolor(ZONE_COLOR, 120), width=1,
+                                                                        style=Qt.PenStyle.DashLine)), 29)
+            edge_on = abs(float(z.n_in @ self.vdir)) < 0.3
+            if edge_on or self.plane == "xy":
+                m = self.P(C.mean(0)[None])[0]
+                anchor = (0.5, -0.2) if z.kind == "floor" else (0.5, 1.2)
+                t = pg.TextItem(f"{z.abbr}  {z.w:.2f} × {z.h:.2f}", color=qcolor(ZONE_COLOR), anchor=anchor)
+                t.setFont(bold); t.setPos(float(m[0]), float(m[1]))
+                self._add(t, 31)
 
         # --- enceintes
         for o in scene.objects:
@@ -537,10 +570,27 @@ class View3D(gl.GLViewWidget):
                 by_order.setdefault((p["order"], p.get("color")), []).append(seg)
         for (order, pcol), segs in by_order.items():
             col = pcol or S.ORDER_COLORS[min(order, 5)]
-            self._lines(np.vstack(segs), S.hex_rgba(col, 0.75 if order == 1 else 0.45), 1.3)
+            self._lines(np.vstack(segs), S.hex_rgba(col, {1: 0.8, 2: 0.5, 3: 0.3}.get(order, 0.2)), 1.3)
+
+        # --- zones de traitement
+        font = QtGui.QFont("DejaVu Sans", 8)
+        bold = QtGui.QFont("DejaVu Sans", 9); bold.setBold(True)
+        segs, plan = [], []
+        for z in res.get("zones", []):
+            C = zone_corners(z)
+            segs += [C[i] for k in range(4) for i in (k, (k + 1) % 4)]
+            for r in res.get("zone_plan", {}).get(z.key, []):
+                q = panel_corners(z, r)
+                plan += [q[i] for k in range(4) for i in (k, (k + 1) % 4)]
+            top = z.to3([((z.rect[0] + z.rect[2]) / 2, z.rect[3])])[0] + z.n_in * 0.03
+            self._add(gl.GLTextItem(pos=top, text=f"{z.abbr} {z.w:.2f} × {z.h:.2f} m", color=qcolor(ZONE_COLOR),
+                                    font=bold))
+        if segs:
+            self._lines(np.array(segs), S.hex_rgba(ZONE_COLOR, 1.0), 3.5)
+        if plan:
+            self._lines(np.array(plan), S.hex_rgba(ZONE_COLOR, 0.45), 1.0)
 
         # --- enceintes (volumes extrudés)
-        font = QtGui.QFont("DejaVu Sans", 8)
         for o in scene.objects:
             g = scene.group(o.group)
             col = g.color if g else "#cccccc"

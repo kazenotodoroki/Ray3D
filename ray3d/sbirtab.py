@@ -44,6 +44,7 @@ def _plot(height, xlabel, ylabel, logx):
 class SbirTab(QtWidgets.QWidget):
     changed = QtCore.Signal(bool)
     applied = QtCore.Signal(object)
+    export_pdf = QtCore.Signal()
 
     def __init__(self, scene_getter, ctx_getter):
         super().__init__()
@@ -73,7 +74,8 @@ class SbirTab(QtWidgets.QWidget):
               tip="Dans le grave, l'enceinte rayonne aussi vers l'arrière : le mur derrière elle renvoie "
                   "ce son vers l'écoute. Transition vers la directivité du modèle autour de c / (π · largeur).")
         b.add("sbir_rear_wall", "Mur derrière la position d'écoute", "bool")
-        b.add("sbir_order", "Ordre des réflexions", "int", lo=1, hi=2)
+        b.add("sbir_order", "Ordre des réflexions", "int", lo=1, hi=4,
+              tip="1 à 4 rebonds. Les ordres 3 et 4 prennent un peu plus de temps de calcul.")
         b.add("sbir_show_paths", "Afficher les chemins dans les vues", "bool")
 
         b.section("Réponse au point d'écoute")
@@ -94,6 +96,9 @@ class SbirTab(QtWidgets.QWidget):
         self.table = make_table(["Source", "Paroi", "Δ trajet", "Δt", "1er creux", "rel."], stretch=1)
         self.table.setMinimumHeight(200)
         form.addRow(self.table)
+        bx = QtWidgets.QPushButton("Exporter l'analyse en PDF (vue 3D, SBIR, plans)…")
+        bx.clicked.connect(self.export_pdf)
+        form.addRow(bx)
 
         b.section("Optimisation (écart-type de la réponse dans la bande)")
         b.add("sbir_band_lo", "Bande de", lo=10, hi=5000, step=5, dec=0, suffix=" Hz")
@@ -162,7 +167,7 @@ class SbirTab(QtWidgets.QWidget):
         seen = set()
         for r in rows:                         # premier creux de chaque paroi (réflexion la plus proche)
             key = (r["cat"], r["src"].owner)
-            if key in seen or not (f[0] <= r["notch"] <= f[-1]) or r["rel"] < -20:
+            if r["order"] != 1 or key in seen or not (f[0] <= r["notch"] <= f[-1]) or r["rel"] < -20:
                 continue
             seen.add(key)
             col = QtGui.QColor(SB.CAT_COLORS.get(r["cat"], "#ffffff")); col.setAlpha(170)
@@ -186,7 +191,7 @@ class SbirTab(QtWidgets.QWidget):
         self.table.setRowCount(len(show))
         for i, r in enumerate(show):
             col = SB.CAT_COLORS.get(r["cat"], S.TEXT)
-            lab = SB.CATS.get(r["cat"], "2e ordre")
+            lab = SB.CATS.get(r["cat"], r["cat"]) if r["order"] == 1 else f"{r['order']}× · {r['chain']}"
             self.table.setItem(i, 0, cell(r["src"].name, None, False))
             it = cell(lab, col, False); it.setToolTip(" → ".join(r["surf"]))
             self.table.setItem(i, 1, it)
@@ -203,7 +208,9 @@ class SbirTab(QtWidgets.QWidget):
         if ctx is None:
             self.scan_lab.setText("Ajoutez un écouteur et des sources.")
             return
-        opts = dict(ctx["opts"], band_lo=st.sbir_band_lo, band_hi=st.sbir_band_hi)
+        # le balayage recalcule tous les chemins à chaque position : ordre limité à 2
+        opts = dict(ctx["opts"], band_lo=st.sbir_band_lo, band_hi=st.sbir_band_hi,
+                    order=min(ctx["opts"].get("order", 1), 2))
         QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             if st.sbir_scan == SCANS[0]:
