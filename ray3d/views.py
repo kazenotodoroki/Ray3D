@@ -250,14 +250,15 @@ class View2D(pg.PlotWidget):
         bold = QtGui.QFont(); bold.setBold(True); bold.setPointSize(8)
         for z in res.get("zones", []):
             C = zone_corners(z)
-            pc = self.P(np.vstack([C, C[:1]]))
-            self._add(pg.PlotDataItem(pc[:, 0], pc[:, 1], pen=pg.mkPen(qcolor(ZONE_COLOR, 240), width=3.2)), 30)
+            if not z.empty:
+                pc = self.P(np.vstack([C, C[:1]]))
+                self._add(pg.PlotDataItem(pc[:, 0], pc[:, 1], pen=pg.mkPen(qcolor(ZONE_COLOR, 240), width=3.2)), 30)
             for r in res.get("zone_plan", {}).get(z.key, []):
                 q = self.P(panel_corners(z, r, closed=True))
                 self._add(pg.PlotDataItem(q[:, 0], q[:, 1], pen=pg.mkPen(qcolor(ZONE_COLOR, 120), width=1,
                                                                         style=Qt.PenStyle.DashLine)), 29)
             edge_on = abs(float(z.n_in @ self.vdir)) < 0.3
-            if edge_on or self.plane == "xy":
+            if (edge_on or self.plane == "xy") and not z.empty:
                 m = self.P(C.mean(0)[None])[0]
                 anchor = (0.5, -0.2) if z.kind == "floor" else (0.5, 1.2)
                 t = pg.TextItem(f"{z.abbr}  {z.w:.2f} × {z.h:.2f}", color=qcolor(ZONE_COLOR), anchor=anchor)
@@ -595,11 +596,13 @@ class View3D(gl.GLViewWidget):
         bold = QtGui.QFont("DejaVu Sans", 9); bold.setBold(True)
         segs, plan = [], []
         for z in res.get("zones", []):
-            C = zone_corners(z)
-            segs += [C[i] for k in range(4) for i in (k, (k + 1) % 4)]
             for r in res.get("zone_plan", {}).get(z.key, []):
                 q = panel_corners(z, r)
                 plan += [q[i] for k in range(4) for i in (k, (k + 1) % 4)]
+            if z.empty:
+                continue
+            C = zone_corners(z)
+            segs += [C[i] for k in range(4) for i in (k, (k + 1) % 4)]
             top = z.to3([((z.rect[0] + z.rect[2]) / 2, z.rect[3])])[0] + z.n_in * 0.03
             self._add(gl.GLTextItem(pos=top, text=f"{z.abbr} {z.w:.2f} × {z.h:.2f} m", color=qcolor(ZONE_COLOR),
                                     font=bold))

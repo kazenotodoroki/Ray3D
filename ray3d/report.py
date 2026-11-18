@@ -138,7 +138,7 @@ def gather_analysis(app):
     ctx = app.sbir_context()
     sb = app.compute_sbir() if ctx is not None else None
     # zones minimales : pas affichées quand les panneaux sont posés (ou si masquées)
-    zone_vis = {z.key: not st.treat_hide_zones and T.zone_cfg(z, st)["on"]
+    zone_vis = {z.key: not st.treat_hide_zones and not z.empty and T.zone_cfg(z, st)["on"]
                 and not (z.key in plans and plans[z.key]["placed"]) for z in zones}
     return dict(scene=sc, name=_scene_name(app), units=st.pdf_units, zones=zones, plans=plans, sbir=sb,
                 ctx=ctx, tctx=tctx, zone_vis=zone_vis, traps=T.bass_traps(sc))

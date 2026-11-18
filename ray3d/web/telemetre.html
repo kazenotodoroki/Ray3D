@@ -49,6 +49,10 @@ input:focus,select:focus{outline:1px solid var(--accent);outline-offset:0}
 .mono{font-family:var(--mono)}.dim{color:var(--dim)}.bad{color:var(--bad)}
 small{font-size:12px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);color:var(--fg);padding:10px 14px;border-radius:2px;font-size:14px;z-index:9;max-width:90vw}
+.tscroll{overflow-x:auto}table{border-collapse:collapse;width:100%;font:13px var(--mono)}
+th{font:600 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);text-align:right;padding:6px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+td i{display:block;font-style:normal;color:var(--dim);font-size:11px}.acc{color:var(--accent)}
 .dayh{font:600 12px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:4px 0 10px}
 </style></head>
 <body>
@@ -102,6 +106,12 @@ small{font-size:12px}
     <div class="row"><button class="btn pri" id="pSave">Ajouter</button><button class="btn" id="pNew">Nouveau</button><div class="grow"></div><button class="btn warn sm" id="pDel" hidden>Supprimer</button></div>
   </div>
   <p class="note">Types : angles de la pièce au sol et au plafond → pièce ; points d'un même groupe → objet (contour) ; enceinte et écoute → placées dans la scène, orientées vers le point choisi. Hauteur connue : pour un point bas et loin des repères (mètre ruban).</p>
+</div>
+
+<div class="panel" id="relPanel" hidden>
+  <div class="ph"><h2>Depuis ce point</h2><small id="relFrom"></small></div>
+  <div class="tscroll"><table id="relTab"></table></div>
+  <p class="note">Distance et délai vers chaque enceinte et écoute. Hors axe : écart entre l'orientation de ce point et la ligne vers l'autre élément. Incidence : écart entre l'orientation de l'autre élément et la ligne vers ce point. H = horizontal, V = vertical.</p>
 </div>
 
 <div class="panel">
@@ -172,12 +182,38 @@ function render(fillRef){
   keep('#pAim',opts('Aucune',S.points.filter(q=>q.id!==edit)));
   keep('#bPt',opts('',S.points.filter(q=>sol[q.id]&&sol[q.id].ok)));
   keep('#bGroup',S.groups.map(g=>`<option>${esc(g)}</option>`).join('')||'<option value="">(aucun groupe)</option>');
+  renderRel();
 }
 ['#rAB','#rAC','#rBC','#rH0'].forEach(id=>$(id).addEventListener('change',saveRef));
 $('#rFlip').addEventListener('change',saveRef);
 async function saveRef(){
   try{busy++;S=await api('/api/ref',{AB:val('#rAB'),AC:val('#rAC'),BC:val('#rBC'),h0:val('#rH0')||0,flip:$('#rFlip').checked});render(false);preview()}
   catch(e){toast(e.message)}finally{busy--}
+}
+function offAxis(P,X,Q){
+  const a=[X[0]-P[0],X[1]-P[1],X[2]-P[2]],b=[Q[0]-P[0],Q[1]-P[1],Q[2]-P[2]],la=Math.hypot(...a),lb=Math.hypot(...b);
+  if(!(la>0&&lb>0))return null;
+  const tot=Math.acos(Math.max(-1,Math.min(1,(a[0]*b[0]+a[1]*b[1]+a[2]*b[2])/(la*lb))))*180/Math.PI;
+  let h=(Math.atan2(b[1],b[0])-Math.atan2(a[1],a[0]))*180/Math.PI; h=((h%360)+540)%360-180;
+  const v=(Math.atan2(b[2],Math.hypot(b[0],b[1]))-Math.atan2(a[2],Math.hypot(a[0],a[1])))*180/Math.PI;
+  return {tot,h,v};
+}
+function renderRel(){
+  const pan=$('#relPanel'); if(!S||!edit){pan.hidden=true;return}
+  const sol=Object.fromEntries(S.solved.filter(x=>x.ok).map(x=>[x.id,x])), pq=Object.fromEntries(S.points.map(q=>[q.id,q]));
+  const X=sol[edit], qx=pq[edit]; if(!X){pan.hidden=true;return}
+  pan.hidden=false; const c=S.c||343;
+  const aimX=qx.aim&&sol[qx.aim]; $('#relFrom').textContent=qx.name+(aimX?' → '+pq[qx.aim].name:'');
+  const sg=v=>(v>0?'+':'')+f(v,1)+'°';
+  const ang=o=>o?`<b class="acc">${f(o.tot,1)}°</b><i>H ${sg(o.h)} · V ${sg(o.v)}</i>`:'—';
+  const rows=S.points.filter(q=>q.id!==edit&&sol[q.id]&&(q.type==='hp'||q.type==='ecoute')).map(q=>{
+    const Y=sol[q.id], d=[Y.P[0]-X.P[0],Y.P[1]-X.P[1],Y.P[2]-X.P[2]], L=Math.hypot(...d), Lh=Math.hypot(d[0],d[1]);
+    const aimY=q.aim&&sol[q.aim];
+    return {q,L,t:L/c*1000,site:Math.atan2(d[2],Lh)*180/Math.PI,off:aimX?offAxis(X.P,aimX.P,Y.P):null,inc:aimY?offAxis(Y.P,aimY.P,X.P):null};
+  }).sort((a,b)=>a.L-b.L);
+  $('#relTab').innerHTML=rows.length?'<tr><th>Vers</th><th>Distance</th><th>Délai</th><th>Site</th><th>Hors axe</th><th>Incidence</th></tr>'+
+    rows.map(r=>`<tr><td>${esc(r.q.name)}</td><td class="acc">${f(r.L)} m</td><td>${f(r.t)} ms</td><td>${sg(r.site)}</td><td>${ang(r.off)}</td><td>${ang(r.inc)}</td></tr>`).join('')
+    :'<tr><td class="dim">Aucune enceinte ni écoute mesurée.</td></tr>';
 }
 function formData(){return {id:edit,name:$('#pName').value.trim(),type:$('#pType').value,group:$('#pGroup').value.trim(),
   dA:val('#pA'),dB:val('#pB'),dC:val('#pC'),aim:$('#pAim').value||null,below:$('#pBelow').checked,hk:val('#pHk')}}

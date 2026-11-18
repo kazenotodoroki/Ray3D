@@ -32,7 +32,9 @@ class TeleAPI:
         return os.path.basename(p) if p else "scène sans nom"
 
     def state(self):
-        return TM.state_json(self.app.scene, dict(scene=self.name()))
+        from .model import speed_of_sound
+        return TM.state_json(self.app.scene, dict(scene=self.name(),
+                                                  c=speed_of_sound(self.app.scene.settings.temperature)))
 
     def set_ref(self, d):
         TM.update_ref(self.app.scene.telemetry, d)
@@ -153,6 +155,14 @@ class TeleTab(QtWidgets.QWidget):
         self.table.setMinimumHeight(200)
         self.table.itemSelectionChanged.connect(self._row_changed)
         form.addRow(self.table)
+        self.rel_lab = QtWidgets.QLabel("Depuis le point sélectionné : distances et angles vers les enceintes "
+                                        "et les écoutes")
+        self.rel_lab.setObjectName("info"); self.rel_lab.setWordWrap(True)
+        form.addRow(self.rel_lab)
+        self.rel = make_table(["Vers", "Distance", "Délai", "Site", "Azimut", "Hors axe (ce point)",
+                               "Incidence (sur l'autre)"], stretch=0)
+        self.rel.setMinimumHeight(120)
+        form.addRow(self.rel)
         self.pName = QtWidgets.QLineEdit()
         self.pType = NoWheelCombo()
         for k, v in TM.TYPES.items():
@@ -386,6 +396,31 @@ class TeleTab(QtWidgets.QWidget):
         self.pGroup.clear(); self.pGroup.addItems([""] + groups); self.pGroup.setEditText(gtxt)
         self._fill_aim()
         self._preview()
+        self._relations()
+
+    def _relations(self):
+        from .model import speed_of_sound
+        ids = self.selected_ids()
+        sc = self.scene()
+        _, pts = TM.solve(self.tel())
+        p = next((x for x in pts if ids and x["id"] == ids[0]), None)
+        rows = TM.relations(pts, p["id"], speed_of_sound(sc.settings.temperature)) if p else []
+        if p is None:
+            self.rel_lab.setText("Sélectionnez un point : distances et angles vers les enceintes et les écoutes.")
+        else:
+            aim = next((x for x in pts if x["id"] == p.get("aim")), None)
+            self.rel_lab.setText(f"Depuis « {p['name']} »" + (f", orienté vers « {aim['name']} »" if aim else
+                                 " (sans orientation : pas d'angle hors axe)") +
+                                 " · incidence : angle entre l'axe de l'autre élément et la ligne vers ce point.")
+        self.rel.setRowCount(len(rows))
+        sg = lambda v: f"{v:+.1f}°"
+        ang = lambda o: "—" if o is None else f"{o[0]:.1f}°  (H {sg(o[1])} · V {sg(o[2])})"
+        for i, r in enumerate(rows):
+            vals = [r["name"], f"{r['L']:.2f} m", f"{r['t']:.2f} ms", sg(r["site"]), f"{r['az']:.1f}°",
+                    ang(r["off"]), ang(r["inc"])]
+            for c_, v in enumerate(vals):
+                col = TM.TYPE_COLORS.get(r["type"]) if c_ == 0 else (S.ACCENT if c_ in (1, 5, 6) else None)
+                self.rel.setItem(i, c_, cell(v, col, c_ > 0))
 
     def _fill_aim(self):
         cur = self.pAim.currentData()
@@ -401,6 +436,7 @@ class TeleTab(QtWidgets.QWidget):
         ids = self.selected_ids()
         q = next((p for p in self.tel()["points"] if p["id"] == ids[0]), None) if len(ids) == 1 else None
         self._fill(q)
+        self._relations()
         self.app.recompute()           # repère le point sélectionné dans les vues
 
     def _fill(self, q):

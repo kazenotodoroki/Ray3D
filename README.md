@@ -245,6 +245,11 @@ par exemple) ne comptent pas.
 - Les zones s'affichent **en gras** (jaune) dans les vues, avec leurs dimensions ; le tableau donne
   dimensions et position (mur : depuis le coin gauche vu de l'intérieur et depuis le sol ; sol /
   plafond : en X / Y).
+- **Toutes les parois apparaissent** dans le tableau, même sans réflexion utile (ou sous le seuil
+  « Ignorer sous ») : elles sont alors « vides » et non traitées par défaut. Cochez « Traiter cette
+  zone » pour y poser des panneaux quand même (ex. mur avant) ; le bloc est centré en face de l'écoute.
+- Pour chaque zone, on peut aussi imposer le **nombre de panneaux** (largeur × hauteur, 0 = auto) et
+  la **position du bloc** (centre, depuis le coin gauche et le sol).
 - **Masquer les zones minimales** (case dans les onglets SBIR et TRAITEMENT), par exemple une fois
   les panneaux posés.
 - Le **sol** n'est pas traité par défaut : sélectionnez sa zone et cochez « Traiter cette zone ».
@@ -325,6 +330,11 @@ s'affichent dans les vues quand l'onglet est ouvert.
 - *Enceinte au point* / *Écoute au point* : crée l'élément, orienté (azimut, site) vers son point
   « orienté vers ».
 - *Déplacer la sélection* : amène l'enceinte ou l'écouteur sélectionné sur le point mesuré.
+
+**Depuis ce point** (ordinateur et téléphone) : pour le point sélectionné, distance, délai, site et
+azimut vers chaque enceinte et écoute mesurée ; **hors axe** = écart entre l'orientation du point et
+la ligne vers l'autre élément ; **incidence** = écart entre l'orientation de l'autre élément et la
+ligne vers ce point (total, horizontal, vertical). Les angles demandent un « orienté vers ».
 
 Tout est annulable (Ctrl+Z) et enregistré avec la scène.
 

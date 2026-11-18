@@ -77,9 +77,22 @@ class TreatTab(QtWidgets.QWidget):
         self.drop = NumField(0.0, 0, 2, 0.05, 3, " m"); self.drop.valueChanged.connect(lambda v: self._set("drop", float(v)))
         self.drop.setToolTip("Distance entre le plafond et le dessus du panneau (nuage suspendu).")
         form.addRow("Suspension sous plafond", self.drop)
+        self.nu = NumField(0, 0, 50, 1, 0, "", integer=True); self.nu.valueChanged.connect(lambda v: self._set("nu", int(v)))
+        self.nv = NumField(0, 0, 50, 1, 0, "", integer=True); self.nv.valueChanged.connect(lambda v: self._set("nv", int(v)))
+        hb = QtWidgets.QHBoxLayout(); hb.addWidget(self.nu); hb.addWidget(QtWidgets.QLabel("×")); hb.addWidget(self.nv)
+        form.addRow("Nombre (larg. × haut., 0 = auto)", hb)
+        self.manual = QtWidgets.QCheckBox("Position manuelle du bloc (centre)")
+        self.manual.toggled.connect(self._manual_toggled)
+        form.addRow(self.manual)
+        self.cu = NumField(0, 0, 100, 0.05, 3, " m"); self.cu.valueChanged.connect(lambda v: self._set("cu", float(v)))
+        self.cv = NumField(0, 0, 100, 0.05, 3, " m"); self.cv.valueChanged.connect(lambda v: self._set("cv", float(v)))
+        hb = QtWidgets.QHBoxLayout(); hb.addWidget(self.cu); hb.addWidget(self.cv)
+        self.cu_lab = QtWidgets.QLabel("Centre (gauche, sol)")
+        form.addRow(self.cu_lab, hb)
         self.lay_lab = QtWidgets.QLabel(); self.lay_lab.setObjectName("value"); self.lay_lab.setWordWrap(True)
         form.addRow(self.lay_lab)
-        self._editors = (self.on, self.size, self.pw, self.ph, self.orient, self.thick, self.drop)
+        self._editors = (self.on, self.size, self.pw, self.ph, self.orient, self.thick, self.drop,
+                         self.nu, self.nv, self.manual, self.cu, self.cv)
 
         b.section("Pose")
         b.add("treat_size", "Taille par défaut", "choice", choices=[k for k in T.PANEL_SIZES if k != "Sur mesure"])
@@ -166,17 +179,24 @@ class TreatTab(QtWidgets.QWidget):
             u0, v0, u1, v1 = z.rect
             pos = (f"u {u0:.2f} · v {v0:.2f}→{v1:.2f}" if z.kind == "wall"
                    else f"X {z.O[0] + u0:.2f} · Y {z.O[1] + v0:.2f}")
-            self.table.setItem(i, 0, cell(f"{z.abbr}  {z.label}", None, False))
-            it = cell(f"{z.w:.2f} × {z.h:.2f} m"); it.setFont(bold); self.table.setItem(i, 1, it)
-            it = cell(pos, None, False); it.setFont(bold); self.table.setItem(i, 2, it)
-            self.table.setItem(i, 3, cell(f"{z.level:+.1f} dB", S.DIM))
+            self.table.setItem(i, 0, cell(f"{z.abbr}  {z.label}", None if not z.empty else S.DIM, False))
+            if z.empty:
+                self.table.setItem(i, 1, cell("vide", S.DIM))
+                self.table.setItem(i, 2, cell("réflexions sous le seuil" if z.level > -98 else "aucune réflexion",
+                                              S.DIM, False))
+                self.table.setItem(i, 3, cell(f"{z.level:+.1f} dB" if z.level > -98 else "—", S.DIM))
+            else:
+                it = cell(f"{z.w:.2f} × {z.h:.2f} m"); it.setFont(bold); self.table.setItem(i, 1, it)
+                it = cell(pos, None, False); it.setFont(bold); self.table.setItem(i, 2, it)
+                self.table.setItem(i, 3, cell(f"{z.level:+.1f} dB", S.DIM))
             self.table.setItem(i, 4, cell(f"{n}" if cfg["on"] else "—", S.ACCENT))
         self.table.blockSignals(False)
         if not zones:
             self.summary.setText("Aucune zone : ajoutez une pièce, un écouteur et des enceintes.")
         else:
-            area = sum(z.w * z.h for z in zones)
-            self.summary.setText(f"{len(zones)} zone(s) · {area:.2f} m² à traiter au minimum · "
+            full = [z for z in zones if not z.empty]
+            area = sum(z.w * z.h for z in full)
+            self.summary.setText(f"{len(full)} zone(s) · {area:.2f} m² à traiter au minimum · "
                                  f"{total} panneau(x) prévus")
         npl = sum(len(v) for v in placed.values())
         self.placed_lab.setText(f"{npl} panneau(x) posé(s) dans la scène." if npl else "Aucun panneau posé.")
@@ -211,12 +231,21 @@ class TreatTab(QtWidgets.QWidget):
         self.orient.setCurrentText(cfg["orient"])
         self.thick.setValue(cfg["t"])
         self.drop.setValue(cfg.get("drop", 0.0))
+        self.nu.setValue(int(cfg.get("nu", 0) or 0)); self.nv.setValue(int(cfg.get("nv", 0) or 0))
+        man = bool(cfg.get("manual"))
+        self.manual.setChecked(man)
+        c0 = ((z.rect[0] + z.rect[2]) / 2, (z.rect[1] + z.rect[3]) / 2)
+        self.cu.setRange(0, z.W); self.cv.setRange(0, z.H)
+        self.cu.setValue(float(cfg.get("cu", c0[0])) if man else c0[0])
+        self.cv.setValue(float(cfg.get("cv", c0[1])) if man else c0[1])
+        self.cu_lab.setText("Centre (gauche, sol)" if z.kind == "wall" else "Centre (X, Y depuis le coin)")
         for w in self._editors:
             w.blockSignals(False)
         custom = cfg["size"] == "Sur mesure"
         self.pw.setEnabled(custom); self.ph.setEnabled(custom)
         self.orient.setEnabled(T.PANEL_SIZES.get(cfg["size"]) != "zone")
         self.drop.setEnabled(z.kind == "ceiling")
+        self.cu.setEnabled(man); self.cv.setEnabled(man)
         self.z_lab.setText(f"{z.abbr} · {z.label} : {z.describe()}")
         lay = T.layout(z, cfg, st.treat_gap)
         bu, bv, bw, bh = lay["block"]
@@ -226,7 +255,16 @@ class TreatTab(QtWidgets.QWidget):
         self.lay_lab.setText(f"{lay['nu']} × {lay['nv']} panneau(x) de {lay['pw'] * 100:.0f} × {lay['ph'] * 100:.0f} cm"
                              f" · bloc {bw:.2f} × {bh:.2f} m {where}{hang}" if cfg["on"] else "Zone non traitée.")
 
-    def _set(self, key, val):
+    def _manual_toggled(self, on):
+        z = self._zone()
+        if z is None:
+            return
+        if on:                                    # part du centre actuel
+            self._set("cu", float(self.cu.value()), emit=False)
+            self._set("cv", float(self.cv.value()), emit=False)
+        self._set("manual", bool(on))
+
+    def _set(self, key, val, emit=True):
         z = self._zone()
         if z is None:
             return
@@ -236,4 +274,5 @@ class TreatTab(QtWidgets.QWidget):
         cfg[key] = val
         d[z.key] = cfg
         st.treat_panels = d
-        self.changed.emit(False)
+        if emit:
+            self.changed.emit(False)

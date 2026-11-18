@@ -58,6 +58,7 @@ class Zone:
     W: float                     # étendue de la face
     H: float
     rect: tuple = None           # (u0, v0, u1, v1) zone minimale
+    empty: bool = False          # aucune réflexion utile : zone vide (traitement possible à la main)
     level: float = -99.0         # niveau max réfléchi / direct (dB)
     pts: np.ndarray = None       # points de réflexion (u, v)
     center: np.ndarray = None    # point de réflexion pour la tête au centre (u, v) ou None
@@ -87,6 +88,9 @@ class Zone:
         return KIND_ABBR.get(self.label, "Z")
 
     def describe(self):
+        if self.empty:
+            return ("réflexions sous le seuil" if self.level > -98 else "aucune réflexion") + \
+                " : zone vide, à traiter à la main si besoin"
         u0, v0, u1, v1 = self.rect
         if self.kind == "wall":
             return (f"{self.w:.2f} × {self.h:.2f} m · à {u0:.2f} m du coin gauche, "
@@ -266,18 +270,22 @@ def compute_zones(scene, sources, L, opts):
                 allR.append(R); allrel.append(rel); names.append(s.name)
             Rc, _ = _reflections(geo, s, L[None], fi)
             cen += list(Rc)
-        if not allR:
-            continue
-        R = np.vstack(allR)
-        rel = np.concatenate(allrel)
-        level = float(rel.max())
-        if level < opts.get("min_level", -30.0):
-            continue
         O, eu, ev, n_in, poly = _frame(f, kind)
         W, H = poly.max(0)
+        level = float(np.concatenate(allrel).max()) if allR else -99.0
         z = Zone(key=f"{sh.id}:{f.name}", label=label, kind=kind, face_name=f"{sh.name} · {f.name}",
                  shape_id=sh.id, fi=fi, O=O, eu=eu, ev=ev, n_in=n_in, poly=poly, W=float(W), H=float(H),
                  level=level, sources=sorted(set(names)))
+        if not allR or level < opts.get("min_level", -30.0):
+            # paroi sans réflexion utile : zone vide, centrée en face de l'écoute (à traiter à la main)
+            c = z.to_uv(L[None])[0]
+            c = np.clip(c, [0, 0], [W, H])
+            z.rect = (float(c[0]), float(c[1]), float(c[0]), float(c[1]))
+            z.empty = True
+            z.pts = np.zeros((0, 2))
+            zones.append(z)
+            continue
+        R = np.vstack(allR)
         uv = z.to_uv(R)
         m = opts.get("margin", 0.1)
         lo = np.maximum(uv.min(0) - m, 0.0)
@@ -295,7 +303,7 @@ def compute_zones(scene, sources, L, opts):
 # --------------------------------------------------------------------------- panneaux
 def default_cfg(zone, st):
     """Réglages par défaut d'une zone ; le sol n'est pas traité par défaut (option)."""
-    return dict(on=zone.kind != "floor",
+    return dict(on=zone.kind != "floor" and not zone.empty,
                 size=("Zone entière (1 panneau)" if zone.kind == "floor" else st.treat_size),
                 w=1.2, h=0.6, orient="Auto", t=(0.01 if zone.kind == "floor" else st.treat_thick),
                 drop=(st.treat_ceiling_drop if zone.kind == "ceiling" else 0.0))
@@ -311,6 +319,8 @@ def layout(zone, cfg, gap=0.0):
     """Grille de panneaux couvrant la zone. Renvoie dict(rects=[(u, v, w, h)], nu, nv, pw, ph, block)."""
     zw, zh = zone.w, zone.h
     size = PANEL_SIZES.get(cfg.get("size"), None)
+    if size == "zone" and (zone.empty or zw < 1e-6 or zh < 1e-6):
+        size = None                              # zone vide : taille « sur mesure »
     if size == "zone":
         return dict(rects=[(zone.rect[0], zone.rect[1], zw, zh)], nu=1, nv=1, pw=zw, ph=zh,
                     block=(zone.rect[0], zone.rect[1], zw, zh))
@@ -321,9 +331,16 @@ def layout(zone, cfg, gap=0.0):
     cands = {"Portrait": [(b, a)], "Paysage": [(a, b)]}.get(cfg.get("orient", "Auto"), [(a, b), (b, a)])
     best = None
     cu, cv = (zone.rect[0] + zone.rect[2]) / 2, (zone.rect[1] + zone.rect[3]) / 2
+    if cfg.get("manual"):                        # position du bloc imposée (centre)
+        cu = float(cfg.get("cu", cu))
+        cv = float(cfg.get("cv", cv))
     for pw, ph in cands:
         nu = max(1, math.ceil((zw + gap - 1e-6) / (pw + gap)))
         nv = max(1, math.ceil((zh + gap - 1e-6) / (ph + gap)))
+        if int(cfg.get("nu", 0) or 0) > 0:      # nombre de panneaux imposé
+            nu = int(cfg["nu"])
+        if int(cfg.get("nv", 0) or 0) > 0:
+            nv = int(cfg["nv"])
         while nu > 1 and nu * pw + (nu - 1) * gap > zone.W + 1e-6:
             nu -= 1
         while nv > 1 and nv * ph + (nv - 1) * gap > zone.H + 1e-6:
@@ -331,7 +348,7 @@ def layout(zone, cfg, gap=0.0):
         bw, bh = nu * pw + (nu - 1) * gap, nv * ph + (nv - 1) * gap
         u0 = min(max(cu - bw / 2, 0.0), max(zone.W - bw, 0.0))
         v0 = min(max(cv - bh / 2, 0.0), max(zone.H - bh, 0.0))
-        cover = _overlap((u0, v0, u0 + bw, v0 + bh), zone.rect) / max(zw * zh, 1e-9)
+        cover = _overlap((u0, v0, u0 + bw, v0 + bh), zone.rect) / max(zw * zh, 1e-9) if zw * zh > 1e-9 else 1.0
         score = (-round(cover, 3), nu * nv, bw * bh)
         if best is None or score < best[0]:
             rects = [(u0 + i * (pw + gap), v0 + j * (ph + gap), pw, ph) for j in range(nv) for i in range(nu)]

@@ -306,6 +306,42 @@ def relation(P, Q, c=343.0):
                 az=math.degrees(math.atan2(d[1], d[0])) % 360, t=L / c * 1000)
 
 
+def off_axis(P, X, Q):
+    """Angle entre l'axe P→X et la ligne P→Q : (total, horizontal, vertical) en degrés, ou None."""
+    a = np.asarray(X, float) - np.asarray(P, float)
+    b = np.asarray(Q, float) - np.asarray(P, float)
+    la, lb = np.linalg.norm(a), np.linalg.norm(b)
+    if la < 1e-9 or lb < 1e-9:
+        return None
+    tot = math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b) / (la * lb)))))
+    h = math.degrees(math.atan2(b[1], b[0]) - math.atan2(a[1], a[0]))
+    h = (h + 540) % 360 - 180
+    v = math.degrees(math.atan2(b[2], math.hypot(b[0], b[1])) - math.atan2(a[2], math.hypot(a[0], a[1])))
+    return tot, h, v
+
+
+def relations(pts, pid, c=343.0, types=("hp", "ecoute")):
+    """Depuis le point pid : distance, délai, site, azimut, hors axe du point et incidence sur chaque
+    autre enceinte / écoute (selon leurs orientations « orienté vers »)."""
+    by = {p["id"]: p for p in pts if p["ok"]}
+    X = by.get(pid)
+    if X is None:
+        return []
+    aimX = by.get(X.get("aim") or "")
+    out = []
+    for Y in pts:
+        if Y["id"] == pid or not Y["ok"] or Y["type"] not in types:
+            continue
+        r = relation(X["P"], Y["P"], c)
+        aimY = by.get(Y.get("aim") or "")
+        r.update(id=Y["id"], name=Y["name"], type=Y["type"],
+                 off=off_axis(X["P"], aimX["P"], Y["P"]) if aimX else None,
+                 inc=off_axis(Y["P"], aimY["P"], X["P"]) if aimY else None)
+        out.append(r)
+    out.sort(key=lambda r: r["L"])
+    return out
+
+
 def ground_of(scene):
     """Altitude du sol : plus bas sol de pièce, sinon 0."""
     zs = []
