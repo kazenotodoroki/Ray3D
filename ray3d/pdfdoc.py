@@ -19,7 +19,7 @@ LIGHT = QtGui.QColor("#9a9a9a")
 ACCENT = QtGui.QColor("#e8650a")
 ZONE = QtGui.QColor("#d4a000")
 PANEL_FILL = QtGui.QColor(232, 101, 10, 55)
-SCALES = [1, 2, 2.5, 5, 10, 20, 25, 50, 75, 100, 200, 250, 500]
+SCALES = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250, 500]
 DPI = 300
 
 
@@ -141,6 +141,13 @@ class Doc:
         self.p.drawText(r, int(Qt.TextFlag.TextWordWrap), s)
         return y + br.height() / self.k
 
+    def arc(self, x, y, r, start, span, width=0.2, color=INK):
+        """Arc de cercle (centre x, y en mm), angles en degrés, sens trigonométrique visuel."""
+        self.p.setPen(self.pen(width, color))
+        self.p.setBrush(Qt.BrushStyle.NoBrush)
+        k = self.k
+        self.p.drawArc(QRectF((x - r) * k, (y - r) * k, 2 * r * k, 2 * r * k), int(start * 16), int(span * 16))
+
     def image(self, x, y, w, h, img: QtGui.QImage):
         if img is None or img.isNull():
             return
@@ -224,6 +231,11 @@ class Frame:
         self.c = c
         self.box = box
 
+    def place(self, cx, cy, c):
+        """Centre papier (mm) et centre monde de la vue (pour aligner plusieurs vues)."""
+        self.cx, self.cy, self.c = cx, cy, np.asarray(c, float)
+        return self
+
     def pt(self, a, b):
         return (self.cx + (a - self.c[0]) * self.s, self.cy - (b - self.c[1]) * self.s)
 
@@ -273,10 +285,26 @@ class Frame:
         m = (qa + qb) / 2
         nn = np.array([math.sin(math.radians(ang)), -math.cos(math.radians(ang))])   # « au-dessus » du texte
         tw = doc.text_w(text, size, bold)
-        if tw > L - 1.5:                         # cote courte : texte décalé
-            m = m + nn * 2.6
+        if tw > L - 1.5:                         # cote courte : texte hors de la cote, alterné
+            k = self.__dict__.get("_short", 0)
+            self._short = k + 1
+            ud = np.array([math.cos(math.radians(ang)), math.sin(math.radians(ang))])   # sens de lecture
+            ends = sorted((qa, qb), key=lambda q: float(q @ ud))
+            if k % 2 == 0:
+                m = ends[1] + ud * (tw / 2 + 1.6)
+            else:
+                m = ends[0] - ud * (tw / 2 + 1.6)
+            doc.line(ends[0][0], ends[0][1], (ends[0] - ud * 1.2)[0], (ends[0] - ud * 1.2)[1], 0.15, color)
+            doc.line(ends[1][0], ends[1][1], (ends[1] + ud * 1.2)[0], (ends[1] + ud * 1.2)[1], 0.15, color)
         pos = m + nn * 0.8
         doc.text(pos[0], pos[1], text, size, bold, color, "center", ang, "base")
+        # zone occupée par le texte (pour éviter les chevauchements d'autres étiquettes)
+        th = size * 0.3528 * 1.1
+        ud = np.array([math.cos(math.radians(ang)), math.sin(math.radians(ang))])
+        c = pos + nn * th / 2
+        hx = abs(ud[0]) * tw / 2 + abs(nn[0]) * th / 2 + 0.6
+        hy = abs(ud[1]) * tw / 2 + abs(nn[1]) * th / 2 + 0.6
+        self.__dict__.setdefault("_boxes", []).append((c[0] - hx, c[1] - hy, c[0] + hx, c[1] + hy))
 
     def leader(self, P, dx, dy, text, size=6.5, color=DIM_INK, bold=False):
         x, y = self.pt(*P[:2])

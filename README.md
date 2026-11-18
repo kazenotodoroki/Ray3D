@@ -290,14 +290,18 @@ vue qui sera mise dans le rapport. Le PDF (A4 paysage) contient :
 Quand les panneaux d'une paroi sont posés (ou que les zones sont masquées), sa zone minimale
 n'apparaît plus dans le PDF : seuls les panneaux sont dessinés et cotés.
 
-**Plans de découpe d'un ensemble** (ex. le bureau) : choix de l'ensemble et des unités, puis
+**Plans de découpe d'un ensemble** (ex. le bureau) : choix de l'ensemble et des unités. Une page par
+pièce (les pièces identiques sont regroupées, avec leur quantité), dessinée au plus grand possible,
+avec les cotes sur les côtés et les angles qui ne sont pas droits :
 
-- vues de dessus, de face et de côté de l'ensemble à la même échelle, encombrement coté ;
-- nomenclature : pièces identiques regroupées (repère P1, P2…, quantité, profil, épaisseur) ;
-- position de chaque pièce dans l'ensemble ;
-- une page par pièce : profil à l'échelle avec la longueur de chaque segment, le rayon et la corde
-  des arcs, l'encombrement, les sommets numérotés (coordonnées et angles), et la vue de chant avec
-  l'épaisseur (longueur d'extrusion).
+- pièce découpée dans un panneau (plateau, pied) : le contour, chaque côté coté, l'encombrement, et la
+  vue de l'épaisseur en dessous ; pour chaque courbe : la corde (en tirets), la flèche (f) et le
+  rayon (R) ;
+- pièce dont l'épaisseur est dans le profil (tasseau, planche chanfreinée) : la face longueur ×
+  largeur avec les lignes de chanfrein cotées, et la section cotée à côté, à sa propre échelle.
+
+L'épaisseur d'une pièce est sa plus petite dimension. En-tête : repère, nom(s), quantité, longueur ×
+largeur × épaisseur.
 
 ## Télémètre et smartphone
 
@@ -418,7 +422,8 @@ ray3d/
   treatment.py      zones de premières réflexions, pose des panneaux
   treattab.py       onglet TRAITEMENT
   pdfdoc.py         mise en page PDF, dessin à l'échelle, cotes
-  report.py         exports PDF (analyse acoustique, plans de découpe)
+  report.py         export PDF de l'analyse acoustique
+  cutlist.py        plans de découpe (une page par pièce)
   sessions.py       sauvegarde automatique, versions, fenêtre de démarrage
   telemetry.py      trilatération, repère, construction pièce / objet / sources
   teleserver.py     serveur HTTP + découverte UDP pour le smartphone

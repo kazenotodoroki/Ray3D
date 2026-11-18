@@ -472,6 +472,9 @@ class Settings:
     cam_orbit: bool = False
     # export PDF
     pdf_units: str = "mm"
+    cut_sheet: str = "2800 × 2070 mm"
+    cut_kerf: float = 0.004
+    cut_rotate: bool = True
 
 
 # --------------------------------------------------------------------------- poses
