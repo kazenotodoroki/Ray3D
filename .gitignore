@@ -5,3 +5,10 @@ venv/
 *.egg-info/
 .idea/
 .vscode/
+
+# Android / sauvegardes
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.autosave.json

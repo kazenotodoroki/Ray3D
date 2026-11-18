@@ -18,6 +18,11 @@ from .demo import default_scene, studio_scene
 from . import sbir as SB
 from .sbirtab import SbirTab
 from .treattab import TreatTab
+from .teletab import TeleTab
+from . import sessions as SE
+
+AUTOSAVE = SE.GLOBAL_AUTOSAVE
+from . import telemetry as TM
 from . import treatment as T
 from .library import default_models
 from .libdialog import LibraryDialog
@@ -30,7 +35,6 @@ from . import edit as E
 from .tools import OffsetDialog, SnapDialog
 
 ROLE = Qt.ItemDataRole.UserRole
-AUTOSAVE = os.path.join(os.path.expanduser("~"), ".ray3d", "autosave.json")
 ENSEMBLE_DIR = os.path.join(os.path.expanduser("~"), ".ray3d", "ensembles")
 SPL_KEYS = {"spl_scope", "temperature", "haas", "ref_mode", "per_group_delay", "apply_delays", "show_spl", "show_section",
             "freq", "band", "ear", "section_y", "resolution"}
@@ -87,6 +91,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history, self.hpos, self._restoring = [], -1, False
         self._previewing = False
         self.dirty = False
+        self._saved_snap = None
+        self._modified = False
+        self._version_t = time.time()
+        self._version_dirty = False
         self.timer = QtCore.QTimer(self, singleShot=True, interval=40)
         self.timer.timeout.connect(self.recompute)
         self.autosave_timer = QtCore.QTimer(self, interval=20000)
@@ -190,10 +198,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tab_treat.export_pdf.connect(self.export_analysis_pdf)
         self.tab_treat.export_desk.connect(self.export_cutlist_pdf)
         self.tab_treat.add_bass_trap.connect(self.add_bass_trap)
+        self.tab_tele = TeleTab(get, self)
+        tabs.addTab(self.tab_tele, "TÉLÉMÈTRE")
+        self.tab_tele.changed.connect(self.tele_changed)
+        self.tab_tele.build.connect(lambda d: self._tele_build_ui(d))
         self._corners = []
         tabs.currentChanged.connect(lambda _: self.schedule())
         self.tabs = tabs
-        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
+        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat, self.tab_tele):
             t.changed.connect(self.on_tab_changed)
         self.tab_arr.applied.connect(self.after_edit)
         self.dock_r = QtWidgets.QDockWidget("", self)
@@ -221,11 +233,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 a.setToolTip(tip + (f" ({sc})" if sc else ""))
             bar.addAction(a)
             return a
-        act("Nouveau", self.new_scene, "Ctrl+N")
-        act("Exemple studio", lambda: self.set_scene(studio_scene()),
+        act("Nouveau", lambda: self.new_scene(), "Ctrl+N")
+        act("Exemple studio", self.example_scene,
             tip="Petit studio avec une paire de Yamaha HS8, pour l'étude du SBIR")
-        act("Ouvrir", self.open_scene, "Ctrl+O")
-        act("Enregistrer", self.save_scene, "Ctrl+S")
+        act("Ouvrir", lambda: self.open_scene(), "Ctrl+O")
+        act("Enregistrer", lambda: self.save_scene(), "Ctrl+S")
         tb.addSeparator()
         act("Annuler", self.undo, "Ctrl+Z", tip="Annuler")
         act("Rétablir", self.redo, "Ctrl+Y", tip="Rétablir (ou Ctrl+Maj+Z)")
@@ -270,6 +282,9 @@ class MainWindow(QtWidgets.QMainWindow):
         act("+ Line array", self.add_array, bar=tb2)
         act("+ Rangée", self.add_row, tip="Rangée d'enceintes régulièrement espacées (front fill…)", bar=tb2)
         act("+ Écouteur", self.add_listener, bar=tb2)
+        tb2.addSeparator()
+        act("Versions…", self.show_versions, bar=tb2,
+            tip="Versions horodatées gardées automatiquement (toutes les 5 min de travail)")
         a = QtGui.QAction(self); a.setShortcut(QtGui.QKeySequence("F11")); a.triggered.connect(self.toggle_fullscreen)
         self.addAction(a)
         a = QtGui.QAction(self); a.setShortcut(QtGui.QKeySequence("Escape")); a.triggered.connect(self.escape)
@@ -664,6 +679,97 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status.setText(f"{n} panneau(x) retiré(s)")
         self.schedule(True)
 
+    # ------------------------------------------------------------------ télémètre
+    def tele_markers(self):
+        if self.tabs.currentWidget() is not self.tab_tele:
+            return []
+        fr, pts = TM.solve(self.scene.telemetry)
+        sel = set(self.tab_tele.selected_ids())
+        out = [(P, "#ffffff", k) for k, P in fr.refs().items()]
+        for p in pts:
+            if p["ok"]:
+                col = "#ffe14d" if p["id"] in sel else TM.TYPE_COLORS.get(p["type"], "#cccccc")
+                out.append((p["P"], col, p["name"]))
+        return out
+
+    def tele_changed(self):
+        self.tab_tele.load()
+        self.schedule(False)
+
+    def _tele_build_ui(self, d):
+        try:
+            msg = self.tele_build(d)
+            self.status.setText(msg)
+        except ValueError as e:
+            QtWidgets.QMessageBox.information(self, "Télémètre", str(e))
+
+    def tele_build(self, d):
+        """Construit dans la scène à partir des points mesurés. Renvoie un message ; ValueError si impossible."""
+        sc = self.scene
+        fr, pts = TM.solve(sc.telemetry)
+        ok = [p for p in pts if p["ok"]]
+        by = {p["id"]: p for p in ok}
+        ids = [i for i in (d.get("ids") or []) if i in by]
+        what = d.get("what")
+        if what == "room":
+            if len(ids) >= 3:
+                sol, ceil = [by[i]["P"] for i in ids], [p["P"] for p in ok if p["type"] == "plafond"]
+            else:
+                sol = [p["P"] for p in ok if p["type"] == "sol"]
+                ceil = [p["P"] for p in ok if p["type"] == "plafond"]
+            sh = TM.build_room(sol, ceil, float(d.get("height") or 0))
+            sc.shapes.insert(0, sh)
+            self.schedule(True)
+            self.select(sh.id)
+            return f"Pièce créée : {len(sol)} angles, hauteur {sh.height:.2f} m"
+        if what == "object":
+            g = d.get("group") or ""
+            pp = [by[i] for i in ids] if (not g and ids) else [p for p in ok if g and p["group"] == g]
+            if len(pp) < 3:
+                raise ValueError("Il faut au moins 3 points mesurés (même groupe, ou sélectionnés).")
+            sh = TM.build_object([p["P"] for p in pp], float(d.get("height") or 0), bool(d.get("top", True)),
+                                 TM.ground_of(sc), name=g or "Objet (télémètre)")
+            sc.shapes.append(sh)
+            self.schedule(True)
+            self.select(sh.id)
+            return f"Objet « {sh.name} » créé : {len(pp)} points, épaisseur {sh.height:.2f} m"
+        p = by.get(d.get("point") or "")
+        if p is None:
+            raise ValueError("Choisissez un point mesuré.")
+        aim = by.get(p.get("aim") or "")
+        aimP = aim["P"] if aim else None
+        if what == "speaker":
+            g = self._target_group()
+            mid = d.get("model") or self._model_for("ps12")
+            o = TM.make_speaker(p["name"] or "HP", g.id if g else "", mid, p["P"], aimP)
+            self._add_obj(o)
+            return f"Enceinte « {o.name} » placée" + (f", orientée vers {aim['name']}" if aim else "")
+        if what == "listener":
+            l = TM.make_listener(p["name"] or "Écoute", p["P"])
+            sc.listeners.append(l)
+            if not sc.settings.refl_listener:
+                sc.settings.refl_listener = l.id
+            self.schedule(True)
+            self.select(l.id)
+            return f"Écoute « {l.name} » placée"
+        if what == "move":
+            kind, obj = sc.find(self.sel) if self.sel else (None, None)
+            if kind not in ("object", "listener") or not hasattr(obj, "x"):
+                raise ValueError("Sélectionnez d'abord une enceinte ou un écouteur dans la scène.")
+            if getattr(obj, "locked", False):
+                raise ValueError("L'élément sélectionné est verrouillé.")
+            obj.x, obj.y, obj.z = (round(float(v), 4) for v in p["P"])
+            if aimP is not None and hasattr(obj, "az"):
+                a = TM.aim_angles(p["P"], aimP)
+                if a:
+                    obj.az, obj.el = round(a[0], 2), round(a[1], 2)
+            if kind == "object":
+                self.after_edit(obj)
+            self.props.set_object(kind, obj)
+            self.schedule(True)
+            return f"« {obj.name} » déplacé sur le point {p['name']}"
+        raise ValueError("Action inconnue.")
+
     def add_bass_trap(self, opts):
         cs = self._corners or T.room_corners(self.scene)
         i = opts.get("corner", 0)
@@ -689,6 +795,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _key(self, extra=None):
         d = self.scene.to_dict()
         d["settings"] = {k: v for k, v in d["settings"].items() if k in SPL_KEYS}
+        d.pop("telemetry", None)
         d["extra"] = extra
         return json.dumps(d, sort_keys=True, default=str)
 
@@ -788,7 +895,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 corners = P
         res = dict(rays=rays, cones=cones, refl=shown, maps=maps, section=section,
                    range=(vmin, vmax), src_by_id={s.id: s for s in sc.sources},
-                   corners=corners, markers=self.markers, zones=zones, zone_plan=zone_plan)
+                   corners=corners, markers=self.markers + self.tele_markers(), zones=zones, zone_plan=zone_plan)
         self._last_res = res
         if self.orbit_btn.isChecked():
             l = self.anchor_listener()
@@ -1143,6 +1250,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hpos = len(self.history) - 1
         if self.hpos > 0:
             self.dirty = True
+            self._version_dirty = True
+        if self._saved_snap is None and self.hpos == 0 and not getattr(self, "_restored", False):
+            self._saved_snap = snap
+        self._modified = snap != self._saved_snap
+        self.update_title()
 
     def _restore(self, snap):
         sel = self.sel
@@ -1151,7 +1263,7 @@ class MainWindow(QtWidgets.QMainWindow):
             sc = Scene.from_dict(json.loads(snap))
             self.scene = sc
             self._cache.clear()
-            for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
+            for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat, self.tab_tele):
                 t.load()
             self.sel = sel if sc.find(sel)[1] is not None else None
             self.multi = {i for i in self.multi if sc.find(i)[1] is not None}
@@ -1177,20 +1289,100 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status.setText("Rétabli")
 
     def autosave(self, force=False):
+        """Sauvegarde automatique (à côté du fichier de la scène, ou ~/.ray3d/autosave.json) et versions."""
         if not (self.dirty or force):
             return
         try:
-            os.makedirs(os.path.dirname(AUTOSAVE), exist_ok=True)
-            tmp = AUTOSAVE + ".tmp"
-            self.scene.save(tmp)
-            os.replace(tmp, AUTOSAVE)
+            target = SE.write_autosave(self.scene, self.path)
             self.dirty = False
-            self.status.setText(f"Sauvegarde automatique {time.strftime('%H:%M:%S')}")
+            msg = f"Sauvegarde automatique {time.strftime('%H:%M:%S')}"
+            if self._version_dirty and (force or time.time() - self._version_t >= SE.VERSION_EVERY):
+                SE.write_version(self.scene, self.path)
+                self._version_t = time.time()
+                self._version_dirty = False
+                msg += " · version gardée"
+            self.status.setText(msg)
+            self.status.setToolTip(target)
         except OSError as e:
             self.status.setText(f"Sauvegarde automatique impossible : {e}")
 
+    def update_title(self):
+        name = os.path.basename(self.path) if self.path else "sans nom"
+        self.setWindowTitle(f"{'• ' if self._modified else ''}{name} — Ray 3D")
+
+    def set_path(self, p):
+        self.path = os.path.abspath(p) if p else None
+        if self.path:
+            SE.add_recent(self.path)
+        self.update_title()
+
+    def confirm_discard(self, what="Ouvrir une nouvelle session"):
+        """Demande avant de quitter la scène courante. True = on continue."""
+        if not self._modified:
+            r = QtWidgets.QMessageBox.question(self, "Ray 3D", f"{what} ?")
+            return r == QtWidgets.QMessageBox.StandardButton.Yes
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Ray 3D")
+        box.setText(f"{what} ?\n\nLa scène « {os.path.basename(self.path) if self.path else 'sans nom'} » a des "
+                    "modifications non enregistrées. Elles restent dans la sauvegarde automatique et les versions.")
+        bs = box.addButton("Enregistrer d'abord", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        bd = box.addButton("Continuer sans enregistrer", QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Annuler", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is bs:
+            return self.save_scene()
+        return box.clickedButton() is bd
+
+    def leave_scene(self):
+        """Avant de remplacer la scène : sauvegarde automatique et version de la scène courante."""
+        self.autosave(force=True)
+        if self._version_dirty or self._modified:
+            try:
+                SE.write_version(self.scene, self.path)
+            except OSError:
+                pass
+        if self.path is None and os.path.isfile(SE.GLOBAL_AUTOSAVE):
+            try:
+                SE.archive_file(SE.GLOBAL_AUTOSAVE)
+            except OSError:
+                pass
+
+    def load_scene_file(self, f, restored=False):
+        """Charge un fichier de scène, une sauvegarde automatique ou une version (chemin d'origine conservé)."""
+        sc = Scene.load(f)
+        meta = SE.read_meta(f)
+        orig = meta.get("path") or ""
+        self._restored = restored
+        self.set_scene(sc)
+        if restored:
+            self.set_path(orig if orig and os.path.isdir(os.path.dirname(orig)) else None)
+            self._saved_snap = ""          # modifications à enregistrer
+            self._modified = True
+            self.dirty = True
+            self.status.setText(f"Restauré : {f}" + (f" · Ctrl+S enregistre dans {orig}" if orig else ""))
+        else:
+            self.set_path(f)
+        self._restored = False
+        self.update_title()
+
+    def show_versions(self):
+        dlg = SE.VersionsDialog(self, self.path)
+        if not dlg.exec() or not dlg.choice:
+            return
+        if not self.confirm_discard("Ouvrir cette version"):
+            return
+        self.leave_scene()
+        self.load_scene_file(dlg.choice, restored=True)
+
     def closeEvent(self, ev):
         self.autosave(force=True)
+        if self._version_dirty:
+            try:
+                SE.write_version(self.scene, self.path)
+            except OSError:
+                pass
+        if hasattr(self, "tab_tele"):
+            self.tab_tele.server.stop()
         super().closeEvent(ev)
 
     def unlink(self, o):
@@ -1273,21 +1465,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self.schedule(True)
 
     # ------------------------------------------------------------------ fichiers
+    def example_scene(self):
+        if not self.confirm_discard("Ouvrir l'exemple studio (nouvelle session)"):
+            return
+        self.leave_scene()
+        self.set_scene(studio_scene())
+        self.set_path(None)
+
     def set_scene(self, sc):
+        self._saved_snap = None
+        self._modified = False
         self.history, self.hpos = [], -1
         self.scene = sc
         self.sel = None
         self.multi = set()
         self._cache.clear()
         self.props.set_object(None, None)
-        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat):
+        for t in (self.tab_disp, self.tab_arr, self.tab_del, self.tab_ref, self.tab_sbir, self.tab_treat, self.tab_tele):
             t.load()
         self.refresh_tree()
         self.refresh_lists()
         self.fit_views()
         self.recompute()
 
-    def new_scene(self):
+    def new_scene(self, ask=True):
+        if ask and not self.confirm_discard("Ouvrir une nouvelle session"):
+            return
+        self.leave_scene()
         sc = Scene()
         sc.models = default_models()
         room = Shape("Salle", "Pièce", [[0, 0], [10, 0], [10, 6.5], [0, 6.5]], "XY", 3.0,
@@ -1298,24 +1502,51 @@ class MainWindow(QtWidgets.QMainWindow):
         sc.settings.opt_near, sc.settings.opt_far, sc.settings.opt_zfar = 1.5, 8.0, 1.2
         sc.sync()
         self.set_scene(sc)
+        self.set_path(None)
 
-    def open_scene(self):
-        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Ouvrir", "", "Scène Ray 3D (*.json)")
-        if p:
-            try:
-                self.set_scene(Scene.load(p))
-                self.path = p
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(self, "Ouvrir", f"Impossible de lire le fichier :\n{e}")
+    def open_scene(self, p=None, ask=True):
+        if ask and not self.confirm_discard("Ouvrir une autre scène (nouvelle session)"):
+            return
+        if not p:
+            p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Ouvrir", os.path.dirname(self.path or ""),
+                                                         "Scène Ray 3D (*.json)")
+        if not p:
+            return
+        try:
+            if ask:
+                self.leave_scene()
+            a = SE.newer_autosave(p)
+            if a and QtWidgets.QMessageBox.question(
+                    self, "Ouvrir", f"Une sauvegarde automatique plus récente existe pour ce fichier ({SE.when(a)}).\n"
+                                    "La restaurer (modifications non enregistrées) ?") == QtWidgets.QMessageBox.StandardButton.Yes:
+                self.load_scene_file(a, restored=True)
+            else:
+                self.load_scene_file(p)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Ouvrir", f"Impossible de lire le fichier :\n{e}")
 
     def save_scene(self):
         p = self.path
         if not p:
             p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Enregistrer", "scene.json", "Scène Ray 3D (*.json)")
-        if p:
+        if not p:
+            return False
+        try:
             self.scene.save(p)
-            self.path = p
-            self.status.setText(f"Enregistré : {p}")
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Enregistrer", f"Impossible d'enregistrer :\n{e}")
+            return False
+        self.set_path(p)
+        self._saved_snap = self._snapshot()
+        self._modified = False
+        self.update_title()
+        try:                                       # la sauvegarde automatique suit le fichier
+            SE.write_autosave(self.scene, self.path)
+            self.dirty = False
+        except OSError:
+            pass
+        self.status.setText(f"Enregistré : {p}")
+        return True
 
     def fit_views(self):
         for v in (self.v3d, self.vtop, self.vside):
@@ -1344,17 +1575,26 @@ def setup_app(argv):
 
 def main():
     app = setup_app(sys.argv)
-    sc = Scene.load(sys.argv[1]) if len(sys.argv) > 1 else None
-    if sc is None and os.path.exists(AUTOSAVE):
-        when = time.strftime("%d/%m %H:%M", time.localtime(os.path.getmtime(AUTOSAVE)))
-        r = QtWidgets.QMessageBox.question(None, "Ray 3D", f"Restaurer la session sauvegardée automatiquement "
-                                                           f"({when}) ?")
-        if r == QtWidgets.QMessageBox.StandardButton.Yes:
-            try:
-                sc = Scene.load(AUTOSAVE)
-            except Exception:
-                sc = None
-    w = MainWindow(sc)
+    w = MainWindow()
+    if len(sys.argv) > 1:
+        w.open_scene(sys.argv[1], ask=False)
+    else:
+        dlg = SE.StartDialog()
+        dlg.exec()
+        ch = dlg.choice or ("new",)
+        try:
+            if ch[0] == "restore":
+                w.load_scene_file(ch[1], restored=True)
+            elif ch[0] == "open":
+                w.open_scene(ch[1], ask=False)
+            elif ch[0] == "browse":
+                w.open_scene(ask=False)
+            else:
+                if os.path.isfile(SE.GLOBAL_AUTOSAVE):
+                    SE.archive_file(SE.GLOBAL_AUTOSAVE)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(w, "Ray 3D", f"Impossible d'ouvrir :\n{e}")
+    w.update_title()
     w.show()
     sys.exit(app.exec())
 

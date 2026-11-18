@@ -1,0 +1,9 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- télémètre : faisceau vers un point, repère A B C -->
+    <path android:fillColor="#E9A23B" android:pathData="M30,70 L54,34 L78,70 Z" android:fillAlpha="0.18"/>
+    <path android:strokeColor="#D8DCE1" android:strokeWidth="2.5" android:pathData="M30,70 L54,34 L78,70 Z"/>
+    <path android:strokeColor="#E9A23B" android:strokeWidth="3" android:pathData="M30,70 L66,48"/>
+    <path android:fillColor="#E9A23B" android:pathData="M62,44 h8 v8 h-8 z"/>
+    <path android:fillColor="#D8DCE1" android:pathData="M27,67 h6 v6 h-6 z M51,31 h6 v6 h-6 z M75,67 h6 v6 h-6 z"/>
+</vector>

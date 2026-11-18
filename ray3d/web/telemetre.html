@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ray 3D · télémètre</title>
+<style>
+:root{
+  --bg:#0c0e11; --panel:#13161a; --panel2:#191d22; --line:#262b32; --fg:#d8dce1; --dim:#7b8490;
+  --accent:#e9a23b; --accent-ink:#1a1206; --blue:#6aa6e6; --ok:#5dbb78; --bad:#e2584f;
+  --sans:"sans-serif-condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+  --mono:"Roboto Mono","DejaVu Sans Mono",ui-monospace,Menlo,monospace; --r:2px; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--fg);margin:0}
+body{font:15px/1.4 var(--sans);-webkit-tap-highlight-color:transparent;padding-bottom:40px}
+[hidden]{display:none!important}
+.wrap{padding:0 max(14px,env(safe-area-inset-left,0px));max-width:760px;margin:0 auto}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.hrow{display:flex;align-items:center;gap:10px;padding:12px 0 10px}
+.brand{font-weight:700;letter-spacing:.22em;font-size:15px}.brand i{font-style:normal;color:var(--accent)}
+.conn{margin-left:auto;font:12px var(--mono);color:var(--dim);display:flex;align-items:center;gap:6px}
+.conn b{display:inline-block;width:8px;height:8px;border-radius:1px;background:var(--bad)}
+.conn.on b{background:var(--ok)}
+main{padding:14px 0;display:flex;flex-direction:column;gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px}
+.ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
+.ph h2{margin:0;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.ph small{color:var(--dim);font:11px var(--mono)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim);min-width:0}
+input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r);padding:9px 8px;font:16px var(--mono);width:100%;min-width:0}
+input:focus,select:focus{outline:1px solid var(--accent);outline-offset:0}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px}.chk input{width:auto}
+.btn{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:var(--r);padding:11px 12px;font:600 13px var(--sans);letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
+.btn:active{background:var(--line)}.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.warn{border-color:var(--bad);color:var(--bad)}.btn.sm{padding:7px 9px;font-size:11px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}.grow{flex:1 1 0}
+.kv{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);margin-top:10px}
+.kv div{flex:1 1 110px;background:var(--panel);padding:8px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kv span{font-size:11px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase}
+.kv b{font:500 17px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note{color:var(--dim);font-size:13px;margin:10px 0 0}
+.warnmsg{color:var(--bad);font-size:13px;margin:10px 0 0}
+.list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r);margin-bottom:10px}
+.it{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+.it:last-child{border-bottom:0}.it.sel{background:var(--panel2);box-shadow:inset 2px 0 var(--accent)}
+.badge{font:600 10px var(--mono);padding:3px 5px;border:1px solid var(--line);border-radius:2px;color:var(--dim);min-width:44px;text-align:center}
+.badge.hp{color:var(--accent);border-color:var(--accent)}.badge.ecoute{color:var(--blue);border-color:var(--blue)}
+.badge.sol,.badge.plafond{color:#7fd1ff;border-color:#2f5b73}
+.mono{font-family:var(--mono)}.dim{color:var(--dim)}.bad{color:var(--bad)}
+small{font-size:12px}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);color:var(--fg);padding:10px 14px;border-radius:2px;font-size:14px;z-index:9;max-width:90vw}
+.dayh{font:600 12px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:4px 0 10px}
+</style></head>
+<body>
+<header><div class="wrap"><div class="hrow">
+  <span class="brand">RAY <i>3D</i> · TÉLÉMÈTRE</span>
+  <span class="conn" id="conn"><b></b><span id="connT">connexion…</span></span>
+  <button class="btn sm" id="home" hidden title="Changer de serveur">⇄</button>
+</div></div></header>
+<main class="wrap">
+
+<div class="panel">
+  <div class="ph"><h2>Repère</h2><small id="refMode"></small></div>
+  <div id="refLibre">
+    <p class="note" style="margin-top:0">Marquez trois points au sol A, B, C, aussi écartés que possible et sans être alignés. Mesurez les trois côtés.</p>
+    <div class="grid" style="margin-top:10px">
+      <label class="f">A–B m<input id="rAB" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">A–C m<input id="rAC" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">B–C m<input id="rBC" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">Hauteur de mesure m<input id="rH0" type="number" step="any" inputmode="decimal"></label>
+    </div>
+    <label class="chk"><input type="checkbox" id="rFlip"> C est à droite quand on regarde de A vers B</label>
+    <p class="note">Hauteur de mesure : 0 si le télémètre est posé sur chaque point, sinon la hauteur du trépied au-dessus des points. La position de A et la direction de A→B dans la scène se règlent sur l'ordinateur.</p>
+  </div>
+  <div id="refScene" hidden>
+    <p class="note" style="margin-top:0">Repère sur des points connus de la scène (réglés sur l'ordinateur). Mesurez depuis ces points exacts.</p>
+    <div class="kv" id="refPts"></div>
+  </div>
+  <div class="kv"><div><span>A–B</span><b id="sAB">—</b></div><div><span>A–C</span><b id="sAC">—</b></div><div><span>B–C</span><b id="sBC">—</b></div></div>
+  <p class="warnmsg" id="rWarn" hidden></p>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Points mesurés</h2><small id="ptCount"></small></div>
+  <div class="list" id="pts"></div>
+  <div id="form">
+    <div class="dayh" id="formT">Nouveau point</div>
+    <div class="grid">
+      <label class="f">Nom<input id="pName" type="text" placeholder="ex. Angle 1" autocomplete="off"></label>
+      <label class="f">Type<select id="pType"></select></label>
+      <label class="f">Groupe / objet<input id="pGroup" type="text" list="groups" placeholder="ex. Bureau" autocomplete="off"></label>
+      <label class="f">Distance depuis A m<input id="pA" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">Distance depuis B m<input id="pB" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">Distance depuis C m<input id="pC" type="number" step="any" inputmode="decimal"></label>
+      <label class="f">Orienté vers<select id="pAim"></select></label>
+      <label class="f">Hauteur connue m<input id="pHk" type="number" step="any" inputmode="decimal" placeholder="facultatif"></label>
+    </div>
+    <datalist id="groups"></datalist>
+    <label class="chk"><input type="checkbox" id="pBelow"> Point sous le plan de mesure</label>
+    <div class="kv"><div><span>X · Y</span><b id="vXY">—</b></div><div><span>Hauteur Z</span><b id="vZ">—</b></div><div><span>Précision</span><b id="vS">—</b></div></div>
+    <p class="warnmsg" id="vWarn" hidden></p>
+    <div class="row"><button class="btn pri" id="pSave">Ajouter</button><button class="btn" id="pNew">Nouveau</button><div class="grow"></div><button class="btn warn sm" id="pDel" hidden>Supprimer</button></div>
+  </div>
+  <p class="note">Types : angles de la pièce au sol et au plafond → pièce ; points d'un même groupe → objet (contour) ; enceinte et écoute → placées dans la scène, orientées vers le point choisi. Hauteur connue : pour un point bas et loin des repères (mètre ruban).</p>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Construire dans la scène</h2></div>
+  <div class="grid">
+    <label class="f">Hauteur de la pièce m<input id="bRoomH" type="number" step="any" inputmode="decimal" placeholder="auto"></label>
+  </div>
+  <div class="row"><button class="btn pri grow" id="bRoom">Créer la pièce</button></div>
+  <div class="grid" style="margin-top:14px">
+    <label class="f">Objet (groupe)<select id="bGroup"></select></label>
+    <label class="f">Épaisseur / hauteur m<input id="bObjH" type="number" step="any" inputmode="decimal" placeholder="auto"></label>
+  </div>
+  <label class="chk"><input type="checkbox" id="bTop" checked> Les points sont le dessus de l'objet</label>
+  <div class="row"><button class="btn pri grow" id="bObj">Créer l'objet</button></div>
+  <div class="grid" style="margin-top:14px">
+    <label class="f">Point<select id="bPt"></select></label>
+  </div>
+  <div class="row"><button class="btn grow" id="bHp">Enceinte ici</button><button class="btn grow" id="bLis">Écoute ici</button></div>
+  <p class="note">Les éléments apparaissent tout de suite dans Ray 3D (annulable avec Ctrl+Z sur l'ordinateur). Hauteur auto : angles au plafond mesurés, sinon 2,50 m. Objet auto : du sol jusqu'aux points s'ils sont à la même hauteur.</p>
+</div>
+
+</main>
+<script>
+const $=s=>document.querySelector(s);
+let S=null, edit=null, delArm=false, busy=0;
+const f=(x,d=2)=>x==null||!isFinite(x)?'—':Number(x).toLocaleString('fr-CH',{minimumFractionDigits:d,maximumFractionDigits:d});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const val=id=>{const v=parseFloat(String($(id).value).replace(',','.'));return isFinite(v)?v:null};
+function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2200)}
+async function api(path,body){
+  const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+  const j=await r.json(); if(j.error)throw new Error(j.error); return j;
+}
+function setConn(ok,t){$('#conn').classList.toggle('on',ok);$('#connT').textContent=t}
+const focused=()=>{const a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='SELECT')};
+
+async function poll(){
+  try{
+    const s=await api('/api/state');
+    setConn(true,s.scene||'connecté');
+    if(!S||s.ver!==S.ver||s.sver!==S.sver){S=s;render(!focused())}
+  }catch(e){setConn(false,'hors ligne')}
+}
+setInterval(()=>{if(!busy)poll()},1500);
+
+function render(fillRef){
+  const r=S.ref, scene=r.mode==='scene';
+  $('#refMode').textContent=scene?'points de la scène':'libre';
+  $('#refLibre').hidden=scene; $('#refScene').hidden=!scene;
+  if(fillRef){$('#rAB').value=r.AB??'';$('#rAC').value=r.AC??'';$('#rBC').value=r.BC??'';$('#rH0').value=r.h0??0;$('#rFlip').checked=!!r.flip}
+  $('#refPts').innerHTML=['A','B','C'].map(k=>{const p=S.refs[k]||r[k];return `<div><span>${k}</span><b>${p?f(p[0])+' · '+f(p[1])+' · '+f(p[2]):'—'}</b></div>`}).join('');
+  const sd=S.frame.sides||[];
+  $('#sAB').textContent=f(sd[0])+' m';$('#sAC').textContent=f(sd[1])+' m';$('#sBC').textContent=f(sd[2])+' m';
+  $('#rWarn').hidden=!S.frame.warn; $('#rWarn').textContent=S.frame.warn||'';
+  // types
+  if(!$('#pType').options.length)$('#pType').innerHTML=Object.entries(S.types).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('');
+  $('#groups').innerHTML=S.groups.map(g=>`<option value="${esc(g)}">`).join('');
+  const sol=Object.fromEntries(S.solved.map(x=>[x.id,x]));
+  $('#ptCount').textContent=S.points.length?S.points.length+' point(s)':'';
+  $('#pts').innerHTML=S.points.length?S.points.map(q=>{const s=sol[q.id]||{};
+    const sub=s.ok?`X ${f(s.P[0])} · Y ${f(s.P[1])} · Z ${f(s.P[2])}`:(s.warn||'');
+    return `<div class="it${q.id===edit?' sel':''}" data-id="${q.id}"><span class="badge ${q.type}">${({sol:'SOL',plafond:'PLAF.',objet:'OBJET',hp:'HP',ecoute:'ÉCOUTE',autre:'AUTRE'})[q.type]||'?'}</span>
+      <span>${esc(q.name)}${q.group?' <small class="dim">· '+esc(q.group)+'</small>':''}<br><small class="dim mono">${sub}</small></span>
+      <span class="mono ${s.warn&&s.ok?'bad':''}"><small>${s.ok?(s.warn?'⚠':s.prec):''}</small></span></div>`}).join('')
+    :'<p class="note" style="margin:10px">Aucun point. Mesurez la distance depuis A, B et C puis ajoutez-le.</p>';
+  const opts=(blank,list)=>(blank?`<option value="">${blank}</option>`:'')+list.map(q=>`<option value="${q.id}">${esc(q.name)}</option>`).join('');
+  const keep=(id,html)=>{const el=$(id),v=el.value;el.innerHTML=html;if([...el.options].some(o=>o.value===v))el.value=v};
+  keep('#pAim',opts('Aucune',S.points.filter(q=>q.id!==edit)));
+  keep('#bPt',opts('',S.points.filter(q=>sol[q.id]&&sol[q.id].ok)));
+  keep('#bGroup',S.groups.map(g=>`<option>${esc(g)}</option>`).join('')||'<option value="">(aucun groupe)</option>');
+}
+['#rAB','#rAC','#rBC','#rH0'].forEach(id=>$(id).addEventListener('change',saveRef));
+$('#rFlip').addEventListener('change',saveRef);
+async function saveRef(){
+  try{busy++;S=await api('/api/ref',{AB:val('#rAB'),AC:val('#rAC'),BC:val('#rBC'),h0:val('#rH0')||0,flip:$('#rFlip').checked});render(false);preview()}
+  catch(e){toast(e.message)}finally{busy--}
+}
+function formData(){return {id:edit,name:$('#pName').value.trim(),type:$('#pType').value,group:$('#pGroup').value.trim(),
+  dA:val('#pA'),dB:val('#pB'),dC:val('#pC'),aim:$('#pAim').value||null,below:$('#pBelow').checked,hk:val('#pHk')}}
+function fill(q){
+  $('#pName').value=q?q.name:''; $('#pType').value=q?q.type:($('#pType').value||'sol'); $('#pGroup').value=q?(q.group||''):$('#pGroup').value;
+  $('#pA').value=q?.dA??''; $('#pB').value=q?.dB??''; $('#pC').value=q?.dC??''; $('#pHk').value=q?.hk??''; $('#pBelow').checked=!!q?.below;
+  render(false); $('#pAim').value=q?.aim||'';
+  $('#formT').textContent=q?'Modifier : '+q.name:'Nouveau point'; $('#pSave').textContent=q?'Enregistrer':'Ajouter';
+  $('#pDel').hidden=!q; delArm=false; $('#pDel').textContent='Supprimer'; preview();
+}
+let pvT=null;
+function preview(){clearTimeout(pvT);pvT=setTimeout(async()=>{
+  const d=formData(); if(!(d.dA>0&&d.dB>0&&d.dC>0)){$('#vXY').textContent='—';$('#vZ').textContent='—';$('#vS').textContent='—';$('#vWarn').hidden=true;return}
+  try{const p=await api('/api/preview',d);
+    $('#vXY').textContent=p.ok?f(p.P[0])+' · '+f(p.P[1]):'—'; $('#vZ').textContent=p.ok?f(p.P[2])+' m':'—'; $('#vS').textContent=p.prec||'—';
+    $('#vWarn').hidden=!p.warn; $('#vWarn').textContent=p.warn||''}catch(e){}
+},250)}
+document.querySelectorAll('#form input, #form select').forEach(el=>{el.addEventListener('input',preview);el.addEventListener('change',preview)});
+$('#pSave').onclick=async()=>{
+  const d=formData(); if(!(d.dA>0&&d.dB>0&&d.dC>0)){toast('Saisissez les trois distances depuis A, B et C.');return}
+  try{busy++;const r=await api('/api/point',d);S=r.state;toast((edit?'Point enregistré : ':'Point ajouté : ')+r.point.name);
+    const keepType=d.type, keepGroup=d.group; edit=null; fill(null); $('#pType').value=keepType; $('#pGroup').value=keepGroup;
+    if(navigator.vibrate)navigator.vibrate(30); $('#pName').focus()}
+  catch(e){toast(e.message)}finally{busy--}
+};
+$('#pNew').onclick=()=>{edit=null;fill(null);$('#pName').focus()};
+$('#pDel').onclick=async()=>{
+  if(!delArm){delArm=true;$('#pDel').textContent='Confirmer la suppression';return}
+  try{busy++;S=await api('/api/delete',{id:edit});edit=null;fill(null)}catch(e){toast(e.message)}finally{busy--}
+};
+$('#pts').addEventListener('click',e=>{const it=e.target.closest('.it');if(!it)return;const q=S.points.find(x=>x.id===it.dataset.id);if(!q)return;
+  edit=q.id;fill(q);$('#form').scrollIntoView({block:'start',behavior:'smooth'})});
+async function build(d){try{busy++;const r=await api('/api/build',d);S=r.state;render(false);toast(r.message)}catch(e){toast(e.message)}finally{busy--}}
+$('#bRoom').onclick=()=>build({what:'room',height:val('#bRoomH')||0});
+$('#bObj').onclick=()=>build({what:'object',group:$('#bGroup').value,height:val('#bObjH')||0,top:$('#bTop').checked});
+$('#bHp').onclick=()=>build({what:'speaker',point:$('#bPt').value});
+$('#bLis').onclick=()=>build({what:'listener',point:$('#bPt').value});
+if(window.Ray3DAndroid){$('#home').hidden=false;$('#home').onclick=()=>Ray3DAndroid.home()}
+poll().then(()=>{if(S)fill(null)});
+</script>
+</body></html>

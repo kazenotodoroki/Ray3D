@@ -13,7 +13,7 @@ Python 3.10 ou plus récent.
 
 ```
 pip install -r requirements.txt
-python run.py              # scène d'exemple
+python run.py              # fenêtre de démarrage : restaurer, ouvrir ou nouvelle session
 python run.py scene.json   # ouvrir une scène enregistrée
 ```
 
@@ -56,7 +56,11 @@ python run.py scene.json   # ouvrir une scène enregistrée
   plafond (hors bass traps), pose optimisée de panneaux de la taille choisie.
 - **Exports PDF** : analyse acoustique (vue 3D cadrée, SBIR, plan coté, élévations, liste des
   panneaux) et plans de découpe d'un ensemble (bureau…), cotes en mm, cm ou m.
-- **Annuler / Rétablir** (Ctrl+Z / Ctrl+Y) et **sauvegarde automatique**.
+- **Télémètre + smartphone** : mesures au télémètre (trilatération depuis 3 repères) saisies sur
+  l'ordinateur ou sur un téléphone Android connecté au serveur intégré ; création de la pièce, d'objets,
+  placement des enceintes et de l'écoute.
+- **Annuler / Rétablir** (Ctrl+Z / Ctrl+Y), **sauvegarde automatique** à côté du fichier et
+  **versions** horodatées.
 
 ## Repère et unités
 
@@ -290,6 +294,67 @@ n'apparaît plus dans le PDF : seuls les panneaux sont dessinés et cotés.
   des arcs, l'encombrement, les sommets numérotés (coordonnées et angles), et la vue de chant avec
   l'épaisseur (longueur d'extrusion).
 
+## Télémètre et smartphone
+
+Onglet **TÉLÉMÈTRE** : même méthode que l'app Régie (télémètre sans inclinomètre). On mesure les
+distances d'un point à trois repères A, B, C ; Ray 3D calcule sa position en 3D (trilatération) et la
+précision obtenue (± 1 cm supposé par distance).
+
+**Repère**
+
+- *Libre (comme Régie)* : trois points au sol A, B, C bien écartés et non alignés ; on saisit A–B,
+  A–C, B–C, la hauteur de mesure (0 si le télémètre est posé sur les points), le côté de C, puis où
+  se trouve A dans la scène et la direction de A→B.
+- *Sur des points de la scène* : A, B, C sont des points connus (angles de la pièce au sol ou au
+  plafond, écouteur, enceinte… à choisir dans la liste, ou X, Y, Z saisis). Les côtés se calculent
+  seuls, et tout point mesuré depuis ces trois repères tombe directement au bon endroit : c'est la
+  triangulation pour **placer une source** dans une salle déjà dessinée.
+
+**Points** : nom, type (angle de pièce au sol / au plafond, point d'objet, enceinte, écoute, autre),
+groupe (ex. « Bureau »), distances depuis A, B, C, « orienté vers » un autre point, hauteur connue
+(mètre ruban, pour les points bas et loin des repères), point sous le plan de mesure. Les points
+s'affichent dans les vues quand l'onglet est ouvert.
+
+**Construire dans la scène**
+
+- *Créer la pièce* : contour des angles au sol (ou des points sélectionnés), hauteur = angles au
+  plafond mesurés, ou saisie, ou 2.50 m.
+- *Créer l'objet* : contour des points d'un groupe (ou de la sélection). Épaisseur auto : du sol
+  jusqu'aux points s'ils sont à la même hauteur (dessus d'un bureau), sinon de la hauteur basse à la
+  haute ; ou épaisseur saisie, vers le bas depuis les points.
+- *Enceinte au point* / *Écoute au point* : crée l'élément, orienté (azimut, site) vers son point
+  « orienté vers ».
+- *Déplacer la sélection* : amène l'enceinte ou l'écouteur sélectionné sur le point mesuré.
+
+Tout est annulable (Ctrl+Z) et enregistré avec la scène.
+
+### Serveur et application Android
+
+« **Démarrer le serveur** » (port 8765) : Ray 3D devient un petit serveur sur le réseau local.
+L'adresse s'affiche en grand (ex. `http://192.168.1.20:8765`).
+
+- Sur le téléphone, même Wi-Fi : ouvrir cette adresse. La page propose de **télécharger l'application
+  Android** et de l'**ouvrir dans le navigateur** (même interface, rien à installer).
+- L'application (et la page) reprennent l'onglet Télémètre de Régie : repère, points, distances,
+  aperçu de la position et de la précision, liste des points, et boutons « Créer la pièce »,
+  « Créer l'objet », « Enceinte ici », « Écoute ici ». Chaque saisie arrive tout de suite dans
+  Ray 3D ; ce qui est saisi sur l'ordinateur apparaît sur le téléphone.
+- L'application trouve le serveur toute seule (diffusion UDP, port 47800), ou on saisit l'adresse.
+  Elle garde l'écran allumé ; « ⇄ » ou Retour revient au choix du serveur.
+- Windows demande au premier démarrage d'autoriser Python sur le réseau : acceptez pour les réseaux
+  privés. Le serveur n'a pas de mot de passe : ne le démarrez que sur un réseau de confiance.
+
+**Compiler l'APK** (dossier `android/`, une coquille WebView en Kotlin) :
+
+- *Sans rien installer* : poussez le dépôt sur GitHub ; le workflow `.github/workflows/apk.yml`
+  compile l'APK (onglet Actions › « APK télémètre » › artefact `ray3d-telemetre-apk`).
+- *Android Studio* : File › Open › `android/`, puis Build › Build APK(s).
+
+Puis, dans l'onglet TÉLÉMÈTRE : « **Choisir l'APK Android…** » (copié dans
+`~/.ray3d/ray3d-telemetre.apk`) ; le serveur le propose alors au téléchargement. Un APK posé dans
+`android/ray3d-telemetre.apk` est servi aussi. Sur le téléphone : autoriser l'installation depuis le
+navigateur, puis ouvrir le fichier.
+
 ## Délais
 
 Onglet DÉLAIS : température, groupe(s) main, point de référence (impact de l'axe de chaque source
@@ -299,8 +364,28 @@ Un délai négatif (source plus loin que le main) est signalé.
 ## Fichiers
 
 - Scènes : `.json` (Ctrl+S / Ctrl+O). Les scènes de la toute première version ne sont pas compatibles.
-- Sauvegarde automatique toutes les 20 s et à la fermeture dans `~/.ray3d/autosave.json` ; au
-  démarrage, Ray 3D propose de la restaurer.
+  Le titre de la fenêtre montre le fichier, précédé de « • » s'il y a des modifications non
+  enregistrées.
+
+### Sauvegarde automatique et versions
+
+- **Toutes les 20 s** (si la scène a changé) et à la fermeture.
+- **À côté du fichier ouvert** : `salle.json` → `salle.autosave.json` dans le même dossier (si le
+  dossier n'est pas modifiable : `~/.ray3d/autosave/`). Une scène jamais enregistrée va dans
+  `~/.ray3d/autosave.json`.
+- La sauvegarde automatique **garde le chemin du fichier d'origine** : après une restauration,
+  Ctrl+S réécrit au bon endroit.
+- **Versions horodatées** : une copie au plus toutes les 5 minutes de travail, plus une à la fermeture
+  et avant de changer de scène, dans `~/.ray3d/versions/<nom>/` (40 par scène). Bouton **Versions…**
+  (2e barre) pour en rouvrir une.
+- **Au démarrage**, une fenêtre propose : restaurer la session sauvegardée automatiquement, rouvrir une
+  scène récente (avec ses modifications non enregistrées s'il y en a), ouvrir un fichier, ou commencer
+  une **nouvelle session** (confirmation demandée ; l'ancienne session est rangée dans les versions).
+- **Nouveau, Exemple studio, Ouvrir** demandent toujours confirmation avant de changer de session ;
+  s'il y a des modifications non enregistrées : « Enregistrer d'abord », « Continuer sans
+  enregistrer » ou « Annuler ».
+- En ouvrant un fichier dont la sauvegarde automatique est plus récente, Ray 3D propose de la
+  restaurer.
 
 ## Structure du code
 
@@ -324,6 +409,12 @@ ray3d/
   treattab.py       onglet TRAITEMENT
   pdfdoc.py         mise en page PDF, dessin à l'échelle, cotes
   report.py         exports PDF (analyse acoustique, plans de découpe)
+  sessions.py       sauvegarde automatique, versions, fenêtre de démarrage
+  telemetry.py      trilatération, repère, construction pièce / objet / sources
+  teleserver.py     serveur HTTP + découverte UDP pour le smartphone
+  teletab.py        onglet TÉLÉMÈTRE
+  web/              page mobile du télémètre
+android/            application Android (WebView) du télémètre
   edit.py           coins, déplacements, verrous, ensembles et leur sauvegarde
   tools.py          dialogues Décaler et Accrocher
   widgets.py        champs numériques

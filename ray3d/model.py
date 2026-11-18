@@ -534,6 +534,8 @@ class Scene:
         self.sources: list[Source] = []   # générées
         self.bodies: dict = {}            # obj.id -> liste de faces monde par boîte
         self.delays: dict[str, float] = {}
+        from .telemetry import default_telemetry
+        self.telemetry: dict = default_telemetry()   # mesures au télémètre (repère + points)
 
     # accès
     def group(self, gid):
@@ -724,7 +726,8 @@ class Scene:
                     objects=objs,
                     listeners=[asdict(l) for l in self.listeners],
                     assemblies=[asdict(a) for a in self.assemblies],
-                    settings=asdict(self.settings))
+                    settings=asdict(self.settings),
+                    telemetry=json.loads(json.dumps(self.telemetry, default=float)))
 
     @staticmethod
     def _make(cls, d):
@@ -754,6 +757,8 @@ class Scene:
             if s.assembly and s.assembly not in ids:
                 s.assembly = ""
         sc.settings = cls._make(Settings, d.get("settings", {}))
+        from .telemetry import sanitize
+        sc.telemetry = sanitize(d.get("telemetry"))
         from .library import default_models
         have = {m.id for m in sc.models}
         sc.models += [m for m in default_models() if m.id not in have]

@@ -1,0 +1,27 @@
+name: APK télémètre
+on:
+  push:
+    paths: ["android/**", ".github/workflows/apk.yml"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: 17 }
+      - name: SDK Android (plateforme 34)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+      - uses: gradle/actions/setup-gradle@v5
+        with: { gradle-version: '8.9' }
+      - run: gradle assembleRelease --no-daemon --stacktrace
+      - run: cp app/build/outputs/apk/release/*.apk ray3d-telemetre.apk
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ray3d-telemetre-apk
+          path: android/ray3d-telemetre.apk

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ray 3D · télémètre</title>
+<style>
+:root{--bg:#0c0e11;--panel:#13161a;--panel2:#191d22;--line:#262b32;--fg:#d8dce1;--dim:#7b8490;--accent:#e9a23b;--ink:#1a1206;--bad:#e2584f;
+  --sans:"sans-serif-condensed","Roboto Condensed",system-ui,sans-serif;--mono:"Roboto Mono",ui-monospace,monospace}
+*{box-sizing:border-box}html,body{background:var(--bg);color:var(--fg);margin:0}
+body{font:15px/1.45 var(--sans);padding:22px 16px}
+h1{font-size:16px;letter-spacing:.22em;margin:0 0 20px}h1 i{color:var(--accent);font-style:normal}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:12px;margin-bottom:12px}
+h2{margin:0 0 10px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.btn{display:block;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:2px;padding:13px;
+  font:600 13px var(--sans);letter-spacing:.1em;text-transform:uppercase;margin-top:8px;text-align:left}
+.btn.pri{background:var(--accent);color:var(--ink);border-color:var(--accent);text-align:center}
+.btn small{display:block;font:12px var(--mono);letter-spacing:0;text-transform:none;color:var(--dim);margin-top:2px}
+input{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:2px;padding:11px 8px;font:16px var(--mono);width:100%}
+.note{color:var(--dim);font-size:13px}.bad{color:var(--bad);font-size:14px}
+</style></head><body>
+<h1>RAY <i>3D</i> · TÉLÉMÈTRE</h1>
+<p class="bad" id="msg" hidden></p>
+<div class="panel">
+  <h2>Serveurs Ray 3D sur ce Wi-Fi</h2>
+  <div id="list"><p class="note">Recherche…</p></div>
+  <button class="btn pri" id="scan">Rechercher</button>
+</div>
+<div class="panel">
+  <h2>Adresse du serveur</h2>
+  <input id="addr" placeholder="192.168.1.20:8765" inputmode="url" autocomplete="off">
+  <button class="btn pri" id="go">Se connecter</button>
+  <p class="note">L'adresse s'affiche dans Ray 3D, onglet TÉLÉMÈTRE, une fois le serveur démarré. Le téléphone et l'ordinateur doivent être sur le même réseau.</p>
+</div>
+<script>
+const $=s=>document.querySelector(s), A=window.Ray3DAndroid;
+const m=new URLSearchParams(location.search).get('msg'); if(m){$('#msg').hidden=false;$('#msg').textContent=m}
+const last=A?A.lastServer():''; $('#addr').value=last;
+window.onServers=list=>{
+  $('#list').innerHTML=list.length?list.map(s=>`<button class="btn" data-a="${s.addr}">${s.name||'Ray 3D'}<small>${s.addr}</small></button>`).join('')
+    :'<p class="note">Aucun serveur trouvé. Démarrez le serveur dans Ray 3D (onglet TÉLÉMÈTRE) ou saisissez son adresse.</p>';
+  $('#scan').disabled=false;
+  if(list.length===1&&!m)A.open(list[0].addr);
+};
+$('#list').onclick=e=>{const b=e.target.closest('button');if(b)A.open(b.dataset.a)};
+$('#scan').onclick=()=>{$('#scan').disabled=true;$('#list').innerHTML='<p class="note">Recherche…</p>';A&&A.discover()};
+$('#go').onclick=()=>{const a=$('#addr').value.trim();if(a)A.open(a.includes(':')?a:a+':8765')};
+if(A)A.discover();
+</script>
+</body></html>
